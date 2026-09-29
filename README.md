@@ -1,121 +1,153 @@
+<p align="center">
+  <img src="guide/media/banner.png" alt="Crazyflie 2.1 Brushless in Isaac Sim" width="720">
+</p>
+
 # Drone_RL
 
-An installable downstream Isaac Lab task package with a standard uv `src` layout.
+Reinforcement learning and classical control for the **Crazyflie 2.1 Brushless** in **Isaac Lab 3.0**.
+A cascaded PID (position, velocity, attitude, rate) and the same four layers learned with PPO, one network per layer,
+trained bottom-up and frozen, small enough to run on the drone's STM32 (no ROS in this repo); plus a landing task on an
+ArUco marker seen by a downward camera. Physical constants come from the datasheet, papers and Bitcraze firmware.
 
-No tasks are registered yet. Add task packages under `src/Drone_RL/tasks` and register them with Gymnasium.
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=YOUR_VIDEO_ID"><img src="guide/media/demo_pid_hover.gif" alt="Demo video" width="360"></a>
+  <img src="guide/media/demo_figure8.gif" alt="Kinematic figure-8" width="360">
+</p>
 
-## Installation
+> **Demo video:** https://www.youtube.com/watch?v=YOUR_VIDEO_ID
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then create the project environment. The default
-environment uses the Newton backend and does not install Isaac Sim:
+| | |
+|---|---|
+| Robot | Crazyflie 2.1 Brushless, 34 g, 100 mm frame, 0.2 N max thrust per motor |
+| Simulator | Isaac Sim 6.1 + Isaac Lab 3.0 |
+| RL | rsl_rl 5.5.1 (PPO): `Isaac-UAV-{Rate,Attitude,Velocity,Position}-RL-v0`, `Isaac-UAV-Landing-ArUco-v0` |
+| Extras | cascaded PID baseline, kinematic trajectory tool |
 
-```bash
-uv sync
-```
+Documentation: [guide/readme.md](guide/readme.md) (seven pages, read in order) · [Tiếng Việt](README.vi.md)
 
-This project's `pyproject.toml` uses editable relative paths to an Isaac Lab source checkout. Update
-`[tool.uv.sources]` if either directory moves.
+## 1. Requirements
 
-The project forwards every optional extra declared by the Isaac Lab package used to create it, including physics,
-rendering, visualizer, RL, teleoperation, and development features. Inspect `pyproject.toml` for the complete list and
-pass each required extra to `uv run`:
+- Ubuntu (x86_64), NVIDIA GPU with a recent driver (developed on an RTX 3060, 12 GB)
+- [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html), Python 3.12
+- `git` and [Git LFS](https://git-lfs.com/) (the `.usd` and `.pt` files are stored in LFS)
 
-```bash
-# Standalone OV PhysX
-uv run --extra ovphysx isaaclab random_agent --task <TASK_NAME> physics=ovphysx
+The first Isaac Sim launch asks you to accept the NVIDIA EULA and downloads extensions, so it can take a few minutes.
 
-# Isaac Sim with PhysX and RTX rendering
-uv run --extra isaacsim isaaclab random_agent --task <TASK_NAME> physics=isaacsim_physx
+## 2. Install, step by step
 
-# Isaac Sim with the Rerun visualizer
-uv run --extra isaacsim --extra rerun isaaclab random_agent --task <TASK_NAME> --viz rerun
-```
-
-The `all` extra forwards Isaac Lab's `all` selection. The `ov` extra installs both the `ovphysx` and `ovrtx` runtimes;
-you can also select either independently. Commit `pyproject.toml` and `uv.lock` so collaborators use the same
-environment.
-
-## Run the tasks
-
-After registering a task, list it with:
+### 2.1 Clone
 
 ```bash
-uv run isaaclab list_envs --show_presets
+sudo apt install git-lfs && git lfs install      # once per machine
+mkdir -p ~/Documents/GitHub && cd ~/Documents/GitHub
+git clone https://github.com/vohongquann/Drone_RL.git
+cd Drone_RL && git lfs pull
 ```
 
-## Project structure
+### 2.2 Install Isaac Sim and Isaac Lab (once)
 
-Add task packages under `src/Drone_RL/tasks`. Import each task package from that directory so its Gymnasium
-registrations load through the project's `isaaclab.tasks` entry point.
-
-## Project assets
-
-Keep project-owned USD files and related data under `src/Drone_RL/assets/data`. The asset module exposes a
-stable path that works from an editable checkout and an installed wheel:
-
-```python
-from Drone_RL.assets import DRONE_RL_ASSETS_DIR
-
-robot_usd_path = DRONE_RL_ASSETS_DIR / "robots" / "my_robot.usd"
-```
-
-Keep asset configuration in the `Drone_RL.assets` package and pass `str(robot_usd_path)` to configuration fields that
-expect a string. USD files are configured for Git LFS by the project's `.gitattributes`; install Git LFS before adding
-large binary assets.
-
-## Development
-
-Run the registration test and code-quality checks through the project environment:
+This project expects Isaac Lab as a sibling folder (`../IsaacLab`, see `[tool.uv.sources]` in `pyproject.toml`).
 
 ```bash
-uv run pytest
-uv run pre-commit run --all-files
+cd ~/Documents/GitHub
+git clone https://github.com/isaac-sim/IsaacLab.git
+cd IsaacLab
+conda create -n env_isaaclab python=3.12 -y
+conda activate env_isaaclab
+python -m pip install --upgrade pip
+./isaaclab.sh -i 'isaacsim,rl[rsl-rl]'      # Isaac Sim 6.1 + Isaac Lab + rsl_rl
 ```
 
-The test helpers under `source/isaaclab_tasks/test` in the Isaac Lab repository are not part of the installed
-`isaaclab_tasks` package. Keep test fixtures in this project and use public Isaac Lab APIs. If you copy
-`env_test_utils.py`, it becomes vendored code whose upstream changes you must track.
+The `isaaclab` command does not exist before this step: `./isaaclab.sh -i` installs the Isaac Lab packages into the
+active conda environment, and one of them provides the `isaaclab` console script. Check it with
+`which isaaclab && isaaclab --help`. See the [official installation guide](https://isaac-sim.github.io/IsaacLab/develop/source/setup/installation/index.html)
+if a step fails. The `uv` setup declared in `pyproject.toml` is not what this project was developed with.
 
-To configure VS Code or Cursor, run the `setup_python_env` task or invoke its command directly:
+### 2.3 Install this project
 
 ```bash
-uv run isaaclab --editor
+conda activate env_isaaclab
+cd ~/Documents/GitHub/Drone_RL
+pip install -e . --no-deps
+pip install pytest                    # test dependency
+python -c "import Drone_RL.uav; print('ok')"
 ```
 
-The setup command selects the active interpreter and writes a git-ignored `pyrightconfig.json`. The resulting
-configuration inherits the project's checked-in Pyright settings and adds the Isaac Sim extensions, project `src` root,
-and any Isaac Lab packages discovered in the active Python environment. This supports both Pylance in VS Code and
-basedpyright in Cursor.
+The last line must print `ok`. Every later command must run in the terminal where `env_isaaclab` is active
+and from the `Drone_RL` folder.
 
-In VS Code, use Pylance and select the interpreter that ran the setup command. In Cursor, install the
-[basedpyright extension](https://marketplace.visualstudio.com/items?itemName=detachhead.basedpyright) instead of
-Pylance, select the same interpreter, and reload the window. Both language servers read `pyrightconfig.json`.
-
-When using the `isaacsim` extra, include it while generating the editor configuration so the command can discover the
-Isaac Sim installation:
+### 2.4 Run the tests (no simulator window)
 
 ```bash
-uv run --extra isaacsim isaaclab --editor
+python -m pytest tests -q
 ```
 
-For an Isaac Sim binaries installation that is not available in the project environment, provide its path explicitly:
+## 3. Quick start
+
+Fly the classical PID (open a window with `--viz kit`):
 
 ```bash
-# Linux
-uv run isaaclab --editor --isaac_path <isaac-sim-path>
-
-# Windows
-uv run isaaclab --editor --isaac_path <isaac-sim-path>
+python src/Drone_RL/uav/pid_control/pid_hover_test.py --scenario hover     # hover | square
 ```
 
-## Isaac Sim UI extension
+Follow a known trajectory kinematically and check the motors could fly it:
 
-Add the project root to the Isaac Sim Extension Manager search paths, refresh, and enable the extension under
-`Third Party`. Launch Isaac Sim through the project's `isaacsim` extra so the UI dependencies are available. Kit loads
-`src/Drone_RL/ui_extension_example.py` through `config/extension.toml`.
+```bash
+python src/Drone_RL/uav/pid_control/run_kinematic.py --pattern figure8   # hover | circle | figure8
+```
 
-## Troubleshooting
+Train the RL layers bottom-up, each on top of the frozen ones below (video clips in
+`logs/rsl_rl/uav_<layer>/<run>/videos/train/`):
 
-If Pylance or basedpyright cannot resolve modules, confirm that the selected interpreter matches the one used to run the
-setup command, then reload the editor window. To add a missing extension or reduce indexing memory, edit the `extraPaths`
-array in the root `pyrightconfig.json`; remove simulator extension directories that the project does not use.
+```bash
+isaaclab train --rl_library rsl_rl --task Isaac-UAV-Rate-RL-v0 --num_envs 1024 --video --video_length 400 --video_interval 5000
+python -m Drone_RL.uav.rl_control.freeze --layer rate        # then Attitude, Velocity, Position the same way
+```
+
+Details: [guide/05_rl_cascade.md](guide/05_rl_cascade.md).
+
+## 4. How it works
+
+Read [guide/readme.md](guide/readme.md), then the pages in order:
+
+1. [The drone](guide/01_drone.md): every number and its source
+2. [Propulsion](guide/02_propulsion.md): motor curve, mixer, motor lag, force on the body
+3. [Kinematic flight](guide/03_kinematic_flight.md): can the motors fly a path?
+4. [PID cascade](guide/04_pid_cascade.md): position, velocity, attitude, rate
+5. [RL cascade](guide/05_rl_cascade.md): the same layers learned and frozen one by one
+6. [ArUco landing](guide/06_aruco_landing.md): camera, marker detection, landing policy
+7. [One simulation step](guide/07_simulation_step.md): what runs in which order, from PPO down to PhysX
+
+```
+src/Drone_RL/
+  assets/data/crazyflie/cf2x.usd   drone model (Isaac Sim Crazyflie 2.x)
+  uav/uav_cfg.py                   every physical constant, with its source
+  uav/mdp/                         shared MDP terms: actions (MotorAction, CascadeAction, propulsion, mixer),
+                                   RL layers, commands, observations, rewards, terminations
+  uav/pid_control/                 cascaded PID, layer tests, kinematic trajectory tool
+  uav/rl_control/                  every RL task, one file each (rate, attitude, velocity, position, landing),
+                                   PPO in agents/, freeze.py, frozen/ weights
+tests/                             constants, mixer, PID, RL layers, ArUco (no simulator)
+```
+
+## 5. Known limitations
+
+Not found in any published source, so these are assumptions: the brushless motor time constant (range 0.05 to 0.15 s
+in the simulation; the PID is only tuned for the fast end), propeller mass, in-flight IMU vibration noise. The
+collision geometry of the USD is the Crazyflie 2.x one.
+
+## 6. Development
+
+```bash
+python -m pytest tests -q
+```
+
+## Acknowledgements
+
+Built on [Isaac Lab](https://github.com/isaac-sim/IsaacLab). Parameters from the Crazyflie 2.1 Brushless datasheet,
+[Bitcraze firmware](https://github.com/bitcraze/crazyflie-firmware), Busetto et al. (arXiv:2512.14450), Folk et al.
+(arXiv:2604.00343) and the Bosch BMI088 datasheet.
+
+## License
+
+See [LICENSE](LICENSE).

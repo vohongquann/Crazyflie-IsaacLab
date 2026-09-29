@@ -8,3 +8,6 @@
 from isaaclab_tasks.utils import import_packages
 
 import_packages(__name__, ["utils", ".mdp"])
+
+# UAV tasks (Isaac-UAV-*): importing the package runs its gym.register() calls. 
+import Drone_RL.uav  # noqa: E402, F401

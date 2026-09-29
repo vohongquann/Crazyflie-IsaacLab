@@ -16,6 +16,5 @@ wandb/
 .vscode/launch.json
 pyrightconfig.json
 
-ros/build/
-ros/install/
-ros/log/
+# Hardware docs kept locally, hidden from git for now
+docs

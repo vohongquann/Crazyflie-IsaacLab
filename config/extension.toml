@@ -8,11 +8,11 @@ category = "isaaclab"
 readme  = "README.md"
 
 title = "Drone_RL UI Extension"
-author = "hongquan"
-maintainer = "hongquan"
-description="Isaac Sim UI extension for Drone_RL"
-repository = "https://github.com/isaac-sim/IsaacLab.git"
-keywords = ["extension", "template", "isaaclab"]
+author = "Vo Hong Quan"
+maintainer = "Vo Hong Quan"
+description="Control the Crazyflie 2.1 by Reinforcement Learning in Isaac Lab"
+repository = "https://github.com/vohongquann/Drone_RL.git"
+keywords = ["extension", "drone", "crazyflie", "reinforcement-learning", "isaaclab"]
 
 [dependencies]
 "isaaclab" = {}
