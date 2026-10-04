@@ -3,8 +3,10 @@
 Test: the rate layer flies the attitude (the setpoint steps the roll, pitch and yaw rate, square waves that return the
 drone to level); the thrust only holds the height at 3 m, so the drone does not fall during the test.
 
-    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/rate.py --live --viz kit
-    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/rate.py            # no window, PNG only
+    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/rate.py        # Isaac Sim window + live plot
+    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/rate.py --viz none --no_live  # PNG only
+
+Run it with F5 ("Debug: file đang mở") to break in ``RateController.update`` or ``_control`` and watch the drone.
 """
 import torch
 
@@ -14,11 +16,15 @@ from Drone_RL.uav.pid_control.flight_test import LayerTest, run, step_table
 from Drone_RL.uav.pid_control.pid import PID
 
 
+RATE_KP = (73.0, 73.0, 9.7)                  # (roll, pitch, yaw), output [rad/s^2]
+RATE_KD = (0.27, 0.27, 0.14)
+
+
 class RateController:
     def __init__(self, device, inertia: tuple = U.DRONE_INERTIA_DIAG):
         self.inertia = torch.tensor(inertia, dtype=torch.float32, device=device)
-        kp = torch.tensor([28.4, 28.4, 9.7], device=device)          # (roll, pitch, yaw), output [rad/s^2]
-        kd = torch.tensor([0.30, 0.30, 0.14], device=device)
+        kp = torch.tensor(RATE_KP, device=device)
+        kd = torch.tensor(RATE_KD, device=device)
         self.pid = PID(kp=kp, kd=kd)
 
     def reset(self, env_ids=None) -> None:

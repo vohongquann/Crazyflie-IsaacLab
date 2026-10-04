@@ -16,5 +16,13 @@ wandb/
 .vscode/launch.json
 pyrightconfig.json
 
-# Hardware docs kept locally, hidden from git for now
-docs
+
+# Kinematic flight tools, hidden from git for now (kinematics.py is still imported by attitude.py)
+src/Drone_RL/uav/pid_control/kinematics.py
+src/Drone_RL/uav/pid_control/run_kinematic.py
+
+# ArUco landing, hidden from git for now (observations.py, landing_env_cfg.py and registrations still import them)
+src/Drone_RL/uav/mdp/aruco.py
+src/Drone_RL/uav/rl_control/marker_plate.py
+src/Drone_RL/assets/data/aruco/
+tests/test_aruco.py

@@ -1,13 +1,16 @@
 """PPO (rsl_rl) settings shared by the four RL cascade tasks; each layer file only changes what differs.
 
 Actor 64 x 64 (small enough for the STM32 of the Crazyflie), observation normalisation inside the actor so the frozen
-network carries it along. Iterations are for 1024 environments (the number used with ``--video``). The experiment name ``uav_<layer>`` is where ``freeze.py`` looks for the last checkpoint.
+network carries it along. Iterations are for 1024 environments (the number used with ``--video``). The experiment name is ``uav_<layer>``.
 """
 from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
-from Drone_RL.uav.rl_control.freeze import experiment_name
+
+
+def experiment_name(layer: str) -> str:
+    return f"uav_{layer}"
 
 
 @configclass

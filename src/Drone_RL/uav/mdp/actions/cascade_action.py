@@ -3,10 +3,12 @@
     policy action (trained layer, env step)
         -> FrozenLayer(layer below)  every 1/hz of that layer
         -> ...
-        -> FrozenLayer(rate)         every 1/100 s
-        -> motor commands -> Propulsion (every physics step, 500 Hz)
+        -> FrozenLayer(rate)         every 1/500 s
+        -> motor commands -> Propulsion (every physics step, 1 kHz)
 
 For the rate layer the list of frozen layers is empty: its output are the motor commands.
+With ``pid_rate`` the bottom of the chain is the PID rate controller (``pid_control/rate.py``) instead of the frozen rate
+network: body rates and thrust -> torque -> mixer inverse -> motor commands.
 """
 from __future__ import annotations
 
@@ -15,14 +17,18 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.utils import configclass
 
 from Drone_RL.uav import uav_cfg as U
 from Drone_RL.uav.mdp.actions.frozen_policy import load_frozen
+from Drone_RL.uav.mdp.actions.mixer import force_allocation_inverse
 from Drone_RL.uav.mdp.actions.motor_action import MotorActionCfg
-from Drone_RL.uav.mdp.actions.propulsion import Propulsion
-from Drone_RL.uav.mdp.layers import LAYERS, FlightState, Layer, layers_below
+from Drone_RL.uav.mdp.actions.propulsion import Propulsion, thrust_to_pwm
+from Drone_RL.uav.mdp.flight import GRAVITY
+from Drone_RL.uav.mdp.layers import LAYERS, Layer, layers_below
+from Drone_RL.uav.pid_control.rate import RateController
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -55,15 +61,42 @@ class FrozenLayer:
         self.policy = load_frozen(layer.name, device, frozen_dir)
         self.period = int(round(physics_hz / layer.hz))       # physics steps between two runs of the network
         self.history = History(num_envs, layer, device)
+        self.command = torch.zeros(num_envs, layer.command_dim, device=device)      # what the layer above asked for
         self.output = torch.zeros(num_envs, output_dim(layer), device=device)
 
-    def step(self, state: FlightState, command: torch.Tensor) -> None:
-        action = self.policy(self.layer.observe(state, command, self.history.values)).clamp(-1.0, 1.0)
+    def step(self, env, command: torch.Tensor) -> None:
+        """Run the network once. ``CascadeAction.observing`` is this layer meanwhile, so the observation terms read its
+        command and history."""
+        self.command = command
+        action = self.policy(self.layer.observe(env)).clamp(-1.0, 1.0)
         self.history.push(action)
-        self.output = self.layer.output(action, command, state)
+        self.output = self.layer.output(action, command, env)
 
     def reset(self, env_ids) -> None:
         self.history.reset(env_ids)
+
+
+class PIDRateLayer:
+    """The PID rate controller in place of the frozen rate network: [wanted body rates (3), thrust (1)] -> torque
+    (``RateController``) -> force of each motor (mixer inverse) -> motor commands in [0, 1]. Same interface as
+    ``FrozenLayer``, so ``CascadeAction`` runs it at ``RateLayer.hz`` like a frozen layer."""
+
+    def __init__(self, num_envs: int, physics_hz: float, device):
+        self.layer = LAYERS["rate"]
+        self.period = int(round(physics_hz / self.layer.hz))
+        self.dt = self.period / physics_hz
+        self.controller = RateController(device)
+        self.allocation_inverse = force_allocation_inverse(device)
+        self.output = torch.full((num_envs, 4), U.DRONE_HOVER_THROTTLE, device=device)
+
+    def step(self, env, command: torch.Tensor) -> None:
+        torque = self.controller.update(command[:, :3], isaac_mdp.base_ang_vel(env), self.dt)
+        motor_forces = torch.cat([command[:, 3:4], torque], dim=-1) @ self.allocation_inverse.T
+        a, b, c = U.CF_THRUST_COEF_G
+        self.output = thrust_to_pwm(motor_forces, a, b, c, GRAVITY, U.CF_PWM_MAX) / U.CF_PWM_MAX
+
+    def reset(self, env_ids) -> None:
+        self.controller.reset(env_ids)
 
 
 class CascadeAction(ActionTerm):
@@ -74,21 +107,24 @@ class CascadeAction(ActionTerm):
         self._env = env
         self._robot = env.scene[cfg.asset_name]
         self._body_id = self._robot.find_bodies(cfg.body_name)[0]
-        self._physics_dt = env.physics_dt
         physics_hz = 1.0 / env.physics_dt
 
         self.layer = LAYERS[cfg.layer]
-        self.frozen = [FrozenLayer(layer, self.num_envs, physics_hz, cfg.frozen_dir, self.device)
+        self.frozen = [PIDRateLayer(self.num_envs, physics_hz, self.device) if cfg.pid_rate and layer.name == "rate"
+                       else FrozenLayer(layer, self.num_envs, physics_hz, cfg.frozen_dir, self.device)
                        for layer in layers_below(cfg.layer)]
-        for frozen in self.frozen:
-            if (env.cfg.decimation % frozen.period) != 0:
-                raise ValueError(f"decimation {env.cfg.decimation} is not a multiple of the '{frozen.layer.name}' period")
+        for layer in [self.layer] + [frozen.layer for frozen in self.frozen]:
+            if abs(physics_hz / layer.hz - round(physics_hz / layer.hz)) > 1e-6:
+                raise ValueError(f"the physics rate {physics_hz} Hz is not a multiple of the '{layer.name}' rate {layer.hz} Hz")
 
         self.history = History(self.num_envs, self.layer, self.device)
+        self.observing = self           # the layer the observation terms read: this one, or a frozen one while it runs
         self._raw_actions = torch.zeros(self.num_envs, self.layer.action_dim, device=self.device)
         self._output = torch.zeros(self.num_envs, output_dim(self.layer), device=self.device)
         self._motor = torch.full((self.num_envs, 4), U.DRONE_HOVER_THROTTLE, device=self.device)
         self._propulsion = Propulsion(cfg, self.num_envs, self.device)
+        # Physics steps since the start, never reset: a layer runs when it is a multiple of its period, like
+        # RATE_DO_EXECUTE on the firmware tick. The periods need not divide the env step (velocity 5 over attitude 2).
         self._tick = 0
         self.velocity_at_step_start = torch.zeros(self.num_envs, 3, device=self.device)
 
@@ -106,17 +142,16 @@ class CascadeAction(ActionTerm):
 
     @property
     def thrust(self) -> torch.Tensor:
-        """Total thrust of the four motors now (after the motor lag) [N]."""
+        """Total thrust of the four motors now [N]."""
         return self._propulsion.force.sum(dim=1)
 
     @property
     def motor_commands(self) -> torch.Tensor:
         return self._motor
 
-    def state(self) -> FlightState:
-        return FlightState.of(self._robot, self._env.scene.env_origins)
-
+    @property
     def command(self) -> torch.Tensor:
+        """What the layers above ask of the layer in training."""
         return self._env.command_manager.get_command(self.cfg.command_name)
 
     def reset(self, env_ids=None):
@@ -126,36 +161,34 @@ class CascadeAction(ActionTerm):
         for frozen in self.frozen:
             frozen.reset(env_ids)
         self._propulsion.reset(env_ids)
-        # Start every episode with the motors at hover thrust, as if the drone had been flying.
-        self._propulsion.force[env_ids] = U.DRONE_HOVER_THRUST_N / 4.0
         self._motor[env_ids] = U.DRONE_HOVER_THROTTLE
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = actions.clamp(-1.0, 1.0)
         self.history.push(self._raw_actions)
-        self._output[:] = self.layer.output(self._raw_actions, self.command(), self.state())
+        self._output[:] = self.layer.output(self._raw_actions, self.command, self._env)
         self.velocity_at_step_start[:] = self._robot.data.root_lin_vel_w.torch
-        self._tick = 0
 
     def apply_actions(self):
         command = self._output
-        if self.frozen:
-            state = self.state()
-            for frozen in self.frozen:
-                if self._tick % frozen.period == 0:
-                    frozen.step(state, command)
-                command = frozen.output
+        for frozen in self.frozen:
+            if self._tick % frozen.period == 0:
+                self.observing = frozen
+                frozen.step(self._env, command)
+                self.observing = self
+            command = frozen.output
         self._motor[:] = command
-        self._propulsion.step(self._motor * self.cfg.pwm_max, self._robot, self._body_id, self._physics_dt)
+        self._propulsion.step(self._motor * self.cfg.pwm_max, self._robot, self._body_id)
         self._tick += 1
 
 
 @configclass
 class CascadeActionCfg(MotorActionCfg):
-    """Propulsion settings are those of ``MotorActionCfg`` (motor lag, drag, motor asymmetry drawn every episode)."""
+    """Propulsion settings are those of ``MotorActionCfg`` (drag, motor asymmetry drawn every episode)."""
 
     class_type: type[ActionTerm] = CascadeAction
     layer: str = MISSING                  # "rate", "attitude", "velocity" or "position"
     command_name: str = "layer"
     frozen_dir: str = MISSING             # folder of the frozen <layer>.pt files (rl_control/frozen/)
+    pid_rate: bool = False                # rate below = PID rate controller instead of the frozen rate network
     spin_propellers: bool = False         # visual only; a joint write per environment every 2 ms slows training

@@ -9,9 +9,12 @@ s_i its spin sign (``uav_cfg.CF_MOTOR_SPIN``):
     tau_z =  km sum_i s_i F_i       reaction torque of the propeller drag, km = ``uav_cfg.DRONE_KM``
 
 ``force_allocation_inverse`` is the inverse: the force each motor must produce for a wrench [T, tau_x, tau_y, tau_z].
-It is used by the classical PID and the kinematic flight, which work in newtons and newton metres. ``MotorAction``
-does not need it: the policy already outputs one command per motor.
+It is used wherever the rate loop is the PID, which works in newtons and newton metres: the classical PID cascade, the
+kinematic flight, and the RL tasks run with the PID rate controller below (``CascadeAction`` with ``pid_rate``, e.g.
+``Isaac-UAV-Attitude-PIDRate-RL-v0``). Only a policy that writes the four motor commands itself (``MotorAction``, the RL
+rate layer) does not need it.
 """
+
 import torch
 
 from Drone_RL.uav import uav_cfg as U
@@ -21,14 +24,17 @@ def wrench_matrix(device: str = "cpu") -> torch.Tensor:
     """Matrix (4, 4): [F1 .. F4] [N] -> [T, tau_x, tau_y, tau_z]."""
     xy = torch.tensor(U.CF_MOTOR_XY, dtype=torch.float64, device=device)
     spin = torch.tensor(U.CF_MOTOR_SPIN, dtype=torch.float64, device=device)
-    return torch.stack([
-        torch.ones(4, dtype=torch.float64, device=device),
-        xy[:, 1],
-        -xy[:, 0],
-        U.DRONE_KM * spin,
-    ])
+    return torch.stack(
+        [
+            torch.ones(4, dtype=torch.float64, device=device),
+            xy[:, 1],
+            -xy[:, 0],
+            U.DRONE_KM * spin,
+        ]
+    )
 
 
 def force_allocation_inverse(device: str = "cpu") -> torch.Tensor:
     """Matrix (4, 4): wrench [T, tau_x, tau_y, tau_z] -> [F1 .. F4] [N] (float32)."""
     return torch.linalg.inv(wrench_matrix(device)).float()
+

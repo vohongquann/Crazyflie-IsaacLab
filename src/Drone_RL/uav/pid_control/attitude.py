@@ -1,10 +1,10 @@
 """Attitude layer: wanted acceleration -> thrust and wanted body rates.
 
 Test: attitude and rate layers fly. The setpoint is a roll, pitch and yaw angle; ``angles_to_acceleration`` turns the
-tilt into the horizontal acceleration that holds it (vertical component kept at g, so the height stays about constant).
+tilt into the horizontal acceleration that holds it; the position and velocity layers hold the height (z only).
 
-    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/attitude.py --live --viz kit
-    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/attitude.py        # no window, PNG only
+    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/attitude.py        # Isaac Sim window + live plot
+    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/attitude.py --viz none --no_live   # PNG only
 """
 import math
 
@@ -18,12 +18,16 @@ from Drone_RL.uav.pid_control.pid import PID
 GRAVITY = 9.81
 
 
+ATTITUDE_KP = (8.6, 8.6, 4.0)                # (roll, pitch, yaw), output [rad/s]
+ATTITUDE_MAX_RATE = (6.0, 6.0, 3.0)          # [rad/s] limit of the output
+
+
 class AttitudeController:
     def __init__(self, device, mass: float = U.DRONE_MASS_TOTAL_KG):
         self.mass = mass
         self.gravity = torch.tensor([0.0, 0.0, GRAVITY], device=device)
-        kp = torch.tensor([17.3, 17.3, 4.0], device=device)             # (roll, pitch, yaw)
-        out_limit = torch.tensor([6.0, 6.0, 3.0], device=device)      # [rad/s]
+        kp = torch.tensor(ATTITUDE_KP, device=device)
+        out_limit = torch.tensor(ATTITUDE_MAX_RATE, device=device)
         self.pid = PID(kp=kp, out_limit=out_limit)
 
     def reset(self, env_ids=None) -> None:
@@ -71,7 +75,15 @@ STEPS = [
 
 def _control(controller, wanted, state, dt):
     roll, pitch, yaw = (math.radians(v) for v in wanted)
-    acceleration = angles_to_acceleration(roll, pitch, yaw).to(state.pos.device)
+    # Height hold (position and velocity layers on z only, as in rate.py): without it every tilt step loses some
+    # height for good and the drone hit the ground halfway through the test. The horizontal part is scaled by
+    # (g + a_z) / g so that the wanted tilt does not change.
+    hold_point = state.pos.clone()
+    hold_point[:, 2] = TEST.start_z
+    wanted_velocity = controller.position.update(hold_point, state.pos, dt) * torch.tensor([0.0, 0.0, 1.0], device=state.pos.device)
+    vertical_acceleration = controller.velocity.update(wanted_velocity, state.vel, dt)[:, 2:3]
+    acceleration = angles_to_acceleration(roll, pitch, yaw).to(state.pos.device) * (1.0 + vertical_acceleration / GRAVITY)
+    acceleration[:, 2:3] = vertical_acceleration
     thrust, wanted_rates = controller.attitude.update(acceleration, state.quat, dt, wanted_yaw=yaw)
     return controller.to_pwm(thrust, controller.rate.update(wanted_rates, state.rates, dt))
 

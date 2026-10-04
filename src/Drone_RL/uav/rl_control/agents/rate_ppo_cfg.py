@@ -1,8 +1,7 @@
 """PPO settings of the rate layer task (``Isaac-UAV-Rate-RL-v0``); the rest is in ``cascade_ppo_cfg.py``."""
 from isaaclab.utils import configclass
 
-from Drone_RL.uav.rl_control.agents.cascade_ppo_cfg import LayerPPORunnerCfg, make_actor
-from Drone_RL.uav.rl_control.freeze import experiment_name
+from Drone_RL.uav.rl_control.agents.cascade_ppo_cfg import LayerPPORunnerCfg, experiment_name, make_actor
 
 
 @configclass

@@ -6,7 +6,7 @@ Scenarios:
     hover   hold 0.5 m
     square  hover, then a 0.5 m square at 0.5 m height, 2.5 s per corner
 
-Plant: the same ``Propulsion`` as the RL action (PWM -> thrust curve -> motor lag -> wrench on the body), without
+Plant: the same ``Propulsion`` as the RL action (PWM -> thrust curve -> wrench on the body), without
 drag, motor gain spread or thrust noise. The controller reads the true simulator state (no sensor noise), so this is
 the noise-free baseline to compare the RL tasks against.
 """
@@ -18,8 +18,6 @@ parser = argparse.ArgumentParser(description="Cascaded PID flight on the Crazyfl
 parser.add_argument("--scenario", choices=("hover", "square"), default="hover")
 parser.add_argument("--duration", type=float, default=12.0, help="Flight time [s].")
 parser.add_argument("--num_envs", type=int, default=1)
-parser.add_argument("--motor_tau", type=float, default=None,
-                    help="Motor lag while speeding up [s]; default MOTOR_TAU_INC_RANGE[0].")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 simulation_app = AppLauncher(args).app
@@ -33,7 +31,7 @@ from isaaclab_physx.renderers import IsaacRtxRendererGlobalSettingsCfg  # noqa: 
 from isaaclab_physx.renderers.isaac_rtx_renderer_utils import apply_isaac_rtx_global_settings  # noqa: E402
 
 from Drone_RL.uav import uav_cfg as U  # noqa: E402
-from Drone_RL.uav.mdp.actions.constants import FW_TICK_HZ, MOTOR_TAU_DEC_RANGE, MOTOR_TAU_INC_RANGE  # noqa: E402
+from Drone_RL.uav.mdp.actions.constants import FW_TICK_HZ  # noqa: E402
 from Drone_RL.uav.mdp.actions.motor_action import MotorActionCfg  # noqa: E402
 from Drone_RL.uav.mdp.actions.propulsion import Propulsion  # noqa: E402
 from Drone_RL.uav.pid_control.cascade import CascadePID  # noqa: E402
@@ -82,14 +80,12 @@ def main() -> None:
     body_id = robot.find_bodies("body")[0]
     origins = torch.tensor([[i * ENV_SPACING, 0.0, 0.0] for i in range(n)], device=dev)
 
-    # Controller: knows the nominal mass, inertia and thrust curve, not the motor lag.
+    # Controller: knows the nominal mass, inertia and thrust curve.
     controller = CascadePID(dev)
 
-    # Plant: fixed motor lag (range of width zero), no drag, no motor gain spread, no thrust noise.
-    tau_inc = args.motor_tau if args.motor_tau is not None else MOTOR_TAU_INC_RANGE[0]
+    # Plant: no drag, no motor gain spread, no thrust noise.
     propulsion = Propulsion(MotorActionCfg(
-        asset_name="robot", tau_inc_range=(tau_inc, tau_inc), tau_dec_range=MOTOR_TAU_DEC_RANGE,
-        use_air_drag=False, use_motor_asymmetry=False, use_thrust_noise=False), n, dev)
+        asset_name="robot", use_air_drag=False, use_motor_asymmetry=False, use_thrust_noise=False), n, dev)
 
     # Start on the ground, at rest.
     pose = robot.data.default_root_pose.torch.clone()
@@ -112,7 +108,7 @@ def main() -> None:
                               state.root_ang_vel_b.torch, dt)
 
         # Plant: PWM -> wrench on the body, then one physics step.
-        propulsion.step(pwm, robot, body_id, dt)
+        propulsion.step(pwm, robot, body_id)
         robot.write_data_to_sim()
         sim.step()
         robot.update(dt)
@@ -131,7 +127,7 @@ def main() -> None:
 
     if counted:
         rms = (sq_err / counted).sqrt().mean(0)
-        print(f"RESULT scenario={args.scenario} motor_tau={tau_inc}s  RMS error after {SETTLE_S:g} s (x,y,z) = "
+        print(f"RESULT scenario={args.scenario}  RMS error after {SETTLE_S:g} s (x,y,z) = "
               f"{rms[0]:.3f}, {rms[1]:.3f}, {rms[2]:.3f} m")
 
 

@@ -1,6 +1,6 @@
 """Action of the policy: four motor commands in [0, 1] -> thrust and torque applied to PhysX.
 
-    a (N, 4) in [0, 1]  ->  PWM = a * 65535  ->  thrust curve  ->  motor lag  ->  F_i
+    a (N, 4) in [0, 1]  ->  PWM = a * 65535  ->  thrust curve  ->  F_i
                         ->  total thrust and body torques  ->  wrench on the body
 
 The chain after the PWM is ``propulsion.Propulsion`` (formulas in guide/02_propulsion.md). There is no
@@ -17,7 +17,6 @@ from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
 from isaaclab.utils import configclass
 
 from .propulsion import SPIN_VISUAL_SCALE, Propulsion
-from .constants import MOTOR_TAU_INC_RANGE, MOTOR_TAU_DEC_RANGE
 from Drone_RL.uav.uav_cfg import (
     CF_DRAG_COEF,
     CF_F_MAX_N,
@@ -25,7 +24,6 @@ from Drone_RL.uav.uav_cfg import (
     CF_MOTOR_XY,
     CF_PWM_MAX,
     CF_THRUST_COEF_G,
-    DRONE_HOVER_THRUST_N,
     DRONE_KM,
 )
 
@@ -42,7 +40,6 @@ class MotorAction(ActionTerm):
         super().__init__(cfg, env)
         self._robot = env.scene[cfg.asset_name]
         self._body_id = self._robot.find_bodies(cfg.body_name)[0]
-        self._phys_dt = env.physics_dt
 
         self._pwm_max = cfg.pwm_max
         self._propulsion = Propulsion(cfg, self.num_envs, self.device)
@@ -65,15 +62,13 @@ class MotorAction(ActionTerm):
         self._raw_actions[env_ids] = 0.0
         self._pwm[env_ids] = 0.0
         self._propulsion.reset(env_ids)
-        # Start every episode with the motors at hover thrust, as if the drone had been flying (as CascadeAction).
-        self._propulsion.force[env_ids] = DRONE_HOVER_THRUST_N / 4.0
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions[:] = (self.cfg.offset + self.cfg.scale * actions).clamp(0.0, 1.0)
         self._pwm[:] = self._raw_actions * self._pwm_max
 
     def apply_actions(self):
-        self._propulsion.step(self._pwm, self._robot, self._body_id, self._phys_dt)
+        self._propulsion.step(self._pwm, self._robot, self._body_id)
 
 
 @configclass
@@ -93,9 +88,6 @@ class MotorActionCfg(ActionTermCfg):
     motor_xy: tuple = CF_MOTOR_XY
     motor_spin: tuple[float, float, float, float] = CF_MOTOR_SPIN
 
-    use_motor_lag: bool = True
-    tau_inc_range: tuple[float, float] = MOTOR_TAU_INC_RANGE
-    tau_dec_range: tuple[float, float] = MOTOR_TAU_DEC_RANGE
     use_air_drag: bool = True
     drag_coef: float = CF_DRAG_COEF
     drag_scale: tuple[float, float] = (0.5, 1.5)

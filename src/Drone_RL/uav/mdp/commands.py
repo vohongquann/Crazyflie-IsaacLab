@@ -17,10 +17,13 @@ from typing import TYPE_CHECKING, Sequence
 
 import torch
 
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.utils import configclass
+from isaaclab.utils.math import wrap_to_pi
 
-from Drone_RL.uav.mdp.layers import LAYERS, FlightState, tilt_error, wrap_angle
+from Drone_RL.uav.mdp.flight import tilt_error
+from Drone_RL.uav.mdp.layers import LAYERS
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -33,7 +36,6 @@ class LayerCommand(CommandTerm):
         self._marker = None                     # before super().__init__, which already calls _set_debug_vis_impl
         super().__init__(cfg, env)
         self.layer = LAYERS[cfg.layer]
-        self.robot = env.scene[cfg.asset_name]
         # Imported here: pid_control imports mdp.actions (mixer, propulsion), so a module-level import would be circular.
         from Drone_RL.uav.pid_control.cascade import CascadePID
 
@@ -73,7 +75,9 @@ class LayerCommand(CommandTerm):
 
     def _update_command(self):
         dt = self._env.step_dt
-        state = FlightState.of(self.robot, self._env.scene.env_origins)
+        position = isaac_mdp.root_pos_w(self._env)
+        velocity = isaac_mdp.root_lin_vel_w(self._env)
+        quat = isaac_mdp.root_quat_w(self._env)
         self._draw_offsets(dt)
         yaw = self.target[:, 3:4]
         name = self.layer.name
@@ -82,28 +86,31 @@ class LayerCommand(CommandTerm):
             # The PID layers above hold the height and stop the drone (wanted velocity: 0 across, back to the target
             # height); no horizontal target, so no large tilt is asked for.
             vertical = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-            wanted_velocity = self.pid.position.update(self.target[:, :3], state.position, dt) * vertical
-            wanted_acceleration = self.pid.velocity.update(wanted_velocity, state.velocity, dt)
-            quat = self.robot.data.root_quat_w.torch
+            wanted_velocity = self.pid.position.update(self.target[:, :3], position, dt) * vertical
+            wanted_acceleration = self.pid.velocity.update(wanted_velocity, velocity, dt)
             thrust, wanted_rates = self.pid.attitude.update(wanted_acceleration, quat, dt, wanted_yaw=yaw[:, 0])
             command = torch.cat([wanted_rates, thrust.unsqueeze(-1)], dim=-1)
         elif name == "position":
             command = self.target.clone()
         else:
-            wanted_velocity = self.pid.position.update(self.target[:, :3], state.position, dt)
+            wanted_velocity = self.pid.position.update(self.target[:, :3], position, dt)
             if name == "velocity":
                 command = torch.cat([wanted_velocity, yaw], dim=-1)
             else:
-                wanted_acceleration = self.pid.velocity.update(wanted_velocity, state.velocity, dt)
+                wanted_acceleration = self.pid.velocity.update(wanted_velocity, velocity, dt)
                 if name == "attitude":
                     command = torch.cat([wanted_acceleration, yaw], dim=-1)
                 else:
-                    quat = self.robot.data.root_quat_w.torch
-                    thrust, wanted_rates = self.pid.attitude.update(wanted_acceleration, quat, dt, wanted_yaw=yaw[:, 0])
+                    thrust, wanted_rates = self.pid.attitude.update(
+                        wanted_acceleration,
+                        quat,
+                        dt,
+                        wanted_yaw=yaw[:, 0],
+                    )
                     command = torch.cat([wanted_rates, thrust.unsqueeze(-1)], dim=-1)
         command = command + self.offset
         if name != "rate":
-            command[:, 3] = wrap_angle(command[:, 3])
+            command[:, 3] = wrap_to_pi(command[:, 3])
         self._command[:] = command
 
     def _draw_offsets(self, dt: float) -> None:
@@ -120,17 +127,16 @@ class LayerCommand(CommandTerm):
         self.offset_time_left[ids] = low + torch.rand(len(ids), device=self.device) * (high - low)
 
     def _update_metrics(self):
-        state = FlightState.of(self.robot, self._env.scene.env_origins)
         c = self._command
         name = self.layer.name
         if name == "rate":
-            error = (c[:, :3] - state.body_rates).norm(dim=-1)
+            error = (c[:, :3] - isaac_mdp.base_ang_vel(self._env)).norm(dim=-1)
         elif name == "attitude":
-            error = tilt_error(state.rotation, c[:, :3])
+            error = tilt_error(isaac_mdp.root_quat_w(self._env), c[:, :3])
         elif name == "velocity":
-            error = (c[:, :3] - state.velocity).norm(dim=-1)
+            error = (c[:, :3] - isaac_mdp.root_lin_vel_w(self._env)).norm(dim=-1)
         else:
-            error = (c[:, :3] - state.position).norm(dim=-1)
+            error = (c[:, :3] - isaac_mdp.root_pos_w(self._env)).norm(dim=-1)
         self._error_sum += error
         self._error_steps += 1.0
         self.metrics["error"] = self._error_sum / self._error_steps
@@ -157,6 +163,7 @@ class LayerCommandCfg(CommandTermCfg):
     class_type: type = LayerCommand
     layer: str = MISSING
     asset_name: str = "robot"
+    debug_vis: bool = True
     resampling_time_range: tuple[float, float] = (2.0, 4.0)     # new random target
     target_low: tuple[float, float, float] = (-1.0, -1.0, 1.0)  # [m] relative to the environment origin
     target_high: tuple[float, float, float] = (1.0, 1.0, 2.0)

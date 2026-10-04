@@ -1,16 +1,21 @@
-"""Observations.
+"""Observation terms.
 
-State list of Eschmann et al., arXiv:2404.07837, section IV-B (landing task): "position, orientation, linear velocity,
-angular velocity, action history". Choices the paper does not fix (guide/06_aruco_landing.md, section 6.4):
+RL cascade: the observation of a layer, one function per term, written like the ones of Isaac Lab (``env`` in, tensor
+out). The robot is read through Isaac Lab (``base_ang_vel``, ``root_lin_vel_w``, ``root_pos_w``, ``root_quat_w``,
+``projected_gravity``); the command and the last outputs come from ``CascadeAction.observing``: the layer in training,
+or the frozen layer that the cascade is running at that moment. So a frozen layer sees what it saw in training, with the
+same functions. Each layer lists its terms in ``layers.py`` (``Layer.observation``) and in its env cfg.
 
-    position        relative to the target point (3), world frame [m]
-    orientation     rotation matrix body -> world, flattened (9)
-    linear velocity world frame (3) [m/s]
-    angular velocity body frame (3) [rad/s]
-    action history  the last ``history`` motor commands of the policy, newest first (4 * history), each in [0, 1]
+Landing: the state list of Eschmann et al., arXiv:2404.07837, section IV-B ("position, orientation, linear velocity,
+angular velocity, action history"), with the choices the paper does not fix (guide/06_aruco_landing.md, section 6.4):
 
-RL cascade (``layer_observation``): the observation of the layer in training, built by ``layers.py``.
-Landing (``ArucoObservation``): what the downward camera says about the marker (``aruco.py``).
+    position        relative to the target point (3), world frame [m]       ``position_relative_to_target``
+    orientation     quaternion (x, y, z, w), world frame, real part non-negative (4)    Isaac Lab ``root_quat_w``
+    linear velocity world frame (3) [m/s]                                   Isaac Lab ``root_lin_vel_w``
+    angular velocity body frame (3) [rad/s]                                 Isaac Lab ``base_ang_vel``
+    action history  the last motor commands (4 * history_length), each in [0, 1]    Isaac Lab ``last_action``
+
+plus what the downward camera says about the marker (``ArucoObservation``, ``aruco.py``).
 """
 from __future__ import annotations
 
@@ -18,64 +23,79 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
-from isaaclab.utils.math import matrix_from_quat
+from isaaclab.utils.math import euler_xyz_from_quat, quat_apply_inverse, wrap_to_pi
 
 from Drone_RL.uav.mdp.aruco import ArucoDetector
+from Drone_RL.uav.mdp.flight import GRAVITY, WEIGHT_N, thrust_axis
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def position_relative_to_target(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-                                target_offset: tuple = (0.0, 0.0, 0.0)) -> torch.Tensor:
+# ── RL cascade ──────────────────────────────────────────────────────────────────────────
+# ``action_name``: the cascade action term; its ``observing`` layer has ``command`` (N, command_dim) and ``history``.
+
+def rate_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Wanted body rates minus body rates (3)."""
+    layer = env.action_manager.get_term(action_name).observing
+    return layer.command[:, :3] - isaac_mdp.base_ang_vel(env)
+
+
+def velocity_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Wanted velocity minus velocity (3)."""
+    layer = env.action_manager.get_term(action_name).observing
+    return layer.command[:, :3] - isaac_mdp.root_lin_vel_w(env)
+
+
+def position_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Target position minus position (3)."""
+    layer = env.action_manager.get_term(action_name).observing
+    return layer.command[:, :3] - isaac_mdp.root_pos_w(env)
+
+
+def thrust_ratio(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Wanted total thrust / weight (1)."""
+    layer = env.action_manager.get_term(action_name).observing
+    return layer.command[:, 3:4] / WEIGHT_N
+
+
+def wanted_force_body(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Wanted force per mass (a* + g) in the body frame, divided by g (3)."""
+    layer = env.action_manager.get_term(action_name).observing
+    force_per_mass = layer.command[:, :3] + torch.tensor([0.0, 0.0, GRAVITY], device=env.device)
+    return quat_apply_inverse(isaac_mdp.root_quat_w(env), force_per_mass) / GRAVITY
+
+
+def yaw_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Wanted yaw minus yaw, wrapped to [-pi, pi] (1)."""
+    layer = env.action_manager.get_term(action_name).observing
+    yaw = euler_xyz_from_quat(isaac_mdp.root_quat_w(env))[2]
+    return wrap_to_pi(layer.command[:, 3] - yaw).unsqueeze(-1)
+
+
+def body_up_in_world(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Body up axis in the world frame: where the thrust points (3)."""
+    return thrust_axis(isaac_mdp.root_quat_w(env))
+
+
+def action_history(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Last outputs of the layer, newest first (history * action_dim)."""
+    return env.action_manager.get_term(action_name).observing.history.values.flatten(1)
+
+
+# ── Landing ─────────────────────────────────────────────────────────────────────────────
+
+def position_relative_to_target(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    target_offset: tuple = (0.0, 0.0, 0.0),
+) -> torch.Tensor:
     """Position of the drone minus the target point (N, 3) [m]. The target is the env origin plus ``target_offset``."""
     position = env.scene[asset_cfg.name].data.root_pos_w.torch
     target = env.scene.env_origins + torch.tensor(target_offset, device=env.device)
     return position - target
-
-
-def orientation_matrix(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Rotation matrix body -> world, flattened row by row (N, 9)."""
-    quat = env.scene[asset_cfg.name].data.root_quat_w.torch
-    return matrix_from_quat(quat).reshape(-1, 9)
-
-
-def linear_velocity_world(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Linear velocity in the world frame (N, 3) [m/s]."""
-    return env.scene[asset_cfg.name].data.root_lin_vel_w.torch
-
-
-def angular_velocity_body(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Angular velocity in the body frame (N, 3) [rad/s]."""
-    return env.scene[asset_cfg.name].data.root_ang_vel_b.torch
-
-
-class ActionHistory(ManagerTermBase):
-    """The last ``history`` motor commands (N, 4 * history), newest first. Zero at the start of an episode."""
-
-    def __init__(self, cfg, env):
-        super().__init__(cfg, env)
-        self._history = torch.zeros(env.num_envs, cfg.params["history"], 4, device=env.device)
-        self._pushed_at_step = -1
-
-    def reset(self, env_ids=None):
-        self._history[env_ids if env_ids is not None else slice(None)] = 0.0
-
-    def __call__(self, env: ManagerBasedRLEnv, history: int = 4, action_name: str = "motor") -> torch.Tensor:
-        # Push once per environment step: the observation can be computed twice in one step (final observation, recorders).
-        if env.common_step_counter != self._pushed_at_step:
-            self._pushed_at_step = env.common_step_counter
-            command = env.action_manager.get_term(action_name).raw_actions    # motor command in [0, 1], (N, 4)
-            self._history = torch.roll(self._history, shifts=1, dims=1)
-            self._history[:, 0] = command
-        return self._history.reshape(env.num_envs, -1)
-
-
-def layer_observation(env: ManagerBasedRLEnv, action_name: str = "cascade", command_name: str = "layer") -> torch.Tensor:
-    """Observation of the RL cascade layer in training (``layers.py``): the same code runs the layer once it is frozen."""
-    term = env.action_manager.get_term(action_name)
-    return term.layer.observe(term.state(), env.command_manager.get_command(command_name), term.history.values)
 
 
 class ArucoObservation(ManagerTermBase):

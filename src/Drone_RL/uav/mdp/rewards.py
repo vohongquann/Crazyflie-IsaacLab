@@ -1,7 +1,9 @@
-"""Rewards of the RL cascade tasks (one group per layer) and of the landing task.
+"""Rewards of the RL cascade tasks and of the landing task.
 
-Every tracking reward is ``exp(-error^2 / std^2)``: 1 on the command, 0 far from it, so staying in the air is worth more
-than falling. The command comes from ``commands.LayerCommand``, the achieved values from ``actions.CascadeAction``.
+Cascade: the error to the command of the layer in training, written like Isaac Lab's ``position_command_error`` and
+``track_lin_vel_xy_exp``. The ``_l2`` terms (negative weight) keep a slope when the error is large, which is where a new
+policy starts; the ``_exp`` terms are ``exp(-error^2 / std^2)``: 1 on the command, 0 far from it. The command comes
+from ``commands.LayerCommand``, the thrust and the velocity at the start of the step from ``actions.CascadeAction``.
 """
 from __future__ import annotations
 
@@ -9,101 +11,79 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.utils.math import euler_xyz_from_quat, wrap_to_pi
 
-from Drone_RL.uav.mdp.layers import WEIGHT_N, FlightState, tilt_error, wrap_angle, yaw_of
-from Drone_RL.uav.mdp.terminations import crashed, landed, linear_speed, pad_distance_and_height
+from Drone_RL.uav.mdp.flight import WEIGHT_N, tilt_error
+from Drone_RL.uav.mdp.terminations import linear_speed, pad_distance_and_height
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def _action(env: ManagerBasedRLEnv, action_name: str = "cascade"):
-    return env.action_manager.get_term(action_name)
+# ── RL cascade ──────────────────────────────────────────────────────────────────────────
+# ``command_name``: the command term of the layer in training; ``action_name``: the cascade action term.
+
+def rate_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Squared error of the body rates to the wanted ones (rate layer)."""
+    command = env.command_manager.get_command(command_name)
+    return (command[:, :3] - isaac_mdp.base_ang_vel(env)).square().sum(-1)
 
 
-def _state(env: ManagerBasedRLEnv, action_name: str = "cascade") -> FlightState:
-    return _action(env, action_name).state()
+def velocity_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Squared error of the velocity to the wanted one (velocity layer)."""
+    command = env.command_manager.get_command(command_name)
+    return (command[:, :3] - isaac_mdp.root_lin_vel_w(env)).square().sum(-1)
 
 
-def _command(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
-    return env.command_manager.get_command(command_name)
+def position_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Squared error of the position to the target (position layer)."""
+    command = env.command_manager.get_command(command_name)
+    return (command[:, :3] - isaac_mdp.root_pos_w(env)).square().sum(-1)
 
 
-def _kernel(error_sq: torch.Tensor, std: float) -> torch.Tensor:
-    return torch.exp(-error_sq / std**2)
+def tilt_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Squared angle between the body up axis and the thrust direction the wanted acceleration needs (attitude layer)."""
+    command = env.command_manager.get_command(command_name)
+    return tilt_error(isaac_mdp.root_quat_w(env), command[:, :3]).square()
 
 
-def body_rate_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Rate layer: body rates against the wanted ones."""
-    error = _command(env)[:, :3] - _state(env).body_rates
-    return _kernel(error.square().sum(-1), std)
+def yaw_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "layer") -> torch.Tensor:
+    """Heading against the wanted yaw (attitude layer)."""
+    command = env.command_manager.get_command(command_name)
+    yaw = euler_xyz_from_quat(isaac_mdp.root_quat_w(env))[2]
+    return torch.exp(-wrap_to_pi(command[:, 3] - yaw).square() / std**2)
 
 
-def body_rate_error_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Rate layer: squared body rate error (use a negative weight). Unlike the kernels it still has a slope when the
-    error is large, which is where a new rate policy starts."""
-    return (_command(env)[:, :3] - _state(env).body_rates).square().sum(-1)
+def acceleration_error_exp(
+    env: ManagerBasedRLEnv,
+    std: float,
+    command_name: str = "layer",
+    action_name: str = "cascade",
+) -> torch.Tensor:
+    """Acceleration over the last policy step (velocity change / step time) against the wanted one (attitude layer)."""
+    command = env.command_manager.get_command(command_name)
+    velocity_before = env.action_manager.get_term(action_name).velocity_at_step_start
+    achieved = (isaac_mdp.root_lin_vel_w(env) - velocity_before) / env.step_dt
+    return torch.exp(-(command[:, :3] - achieved).square().sum(-1) / std**2)
 
 
-def thrust_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Rate layer: total motor thrust against the wanted one, both divided by the weight."""
-    error = (_action(env).thrust - _command(env)[:, 3]) / WEIGHT_N
-    return _kernel(error.square(), std)
-
-
-def tilt_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Attitude layer: angle between the body up axis and the thrust direction the wanted acceleration needs."""
-    return _kernel(tilt_error(_state(env).rotation, _command(env)[:, :3]).square(), std)
-
-
-def tilt_error_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Attitude layer: squared tilt error [rad^2] (use a negative weight); keeps a slope where the kernel is flat."""
-    return tilt_error(_state(env).rotation, _command(env)[:, :3]).square()
-
-
-def yaw_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Attitude layer: heading against the wanted yaw."""
-    error = wrap_angle(_command(env)[:, 3] - yaw_of(_state(env).rotation))
-    return _kernel(error.square(), std)
-
-
-def acceleration_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Attitude layer: acceleration over the last policy step (velocity change / step time) against the wanted one."""
-    term = _action(env)
-    acceleration = (term.state().velocity - term.velocity_at_step_start) / env.step_dt
-    return _kernel((_command(env)[:, :3] - acceleration).square().sum(-1), std)
-
-
-def velocity_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Velocity layer."""
-    return _kernel((_command(env)[:, :3] - _state(env).velocity).square().sum(-1), std)
-
-
-def velocity_error_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Velocity layer: squared velocity error (use a negative weight); keeps a slope where the kernels are flat."""
-    return (_command(env)[:, :3] - _state(env).velocity).square().sum(-1)
-
-
-def position_error_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Position layer: squared position error (use a negative weight); keeps a slope where the kernels are flat."""
-    return (_command(env)[:, :3] - _state(env).position).square().sum(-1)
-
-
-def position_tracking(env: ManagerBasedRLEnv, std: float) -> torch.Tensor:
-    """Position layer."""
-    return _kernel((_command(env)[:, :3] - _state(env).position).square().sum(-1), std)
-
-
-def output_change(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Change of the network output since the last step, squared (use a negative weight)."""
-    history = _action(env).history.values
-    return (history[:, 0] - history[:, 1]).square().sum(-1)
+def thrust_error_exp(
+    env: ManagerBasedRLEnv,
+    std: float,
+    command_name: str = "layer",
+    action_name: str = "cascade",
+) -> torch.Tensor:
+    """Total motor thrust against the wanted one, both divided by the weight (rate layer)."""
+    command = env.command_manager.get_command(command_name)
+    thrust = env.action_manager.get_term(action_name).thrust
+    return torch.exp(-((thrust - command[:, 3]) / WEIGHT_N).square() / std**2)
 
 
 def body_rates_l2(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Squared body rates (use a negative weight)."""
-    return _state(env).body_rates.square().sum(-1)
+    """Squared body rates, the three axes (Isaac Lab's ``ang_vel_xy_l2`` leaves out yaw)."""
+    return isaac_mdp.base_ang_vel(env).square().sum(-1)
 
 
 # ── Landing ─────────────────────────────────────────────────────────────────────────────
@@ -125,11 +105,3 @@ def touchdown_speed_penalty(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("rob
     """Speed squared, weighted by closeness to the ground: it asks for a soft touchdown."""
     _, z = pad_distance_and_height(env, asset_cfg)
     return linear_speed(env, asset_cfg).square() * torch.exp(-z.clamp(min=0.0) / scale)
-
-
-def landed_bonus(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    return landed(env, asset_cfg).float()
-
-
-def crashed_penalty(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    return crashed(env, asset_cfg).float()

@@ -1,4 +1,4 @@
-"""Terminations: flight envelope (RL cascade tasks) and landed / crashed (landing task, pad at the env origin)."""
+"""Terminations: flight volume (RL cascade tasks) and landed / crashed (landing task, pad at the env origin)."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -7,20 +7,15 @@ import torch
 
 from isaaclab.managers import SceneEntityCfg
 
-from Drone_RL.uav.mdp.layers import FlightState
-
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def left_flight_envelope(env: ManagerBasedRLEnv, min_height: float = 0.2, max_height: float = 4.0,
-                         max_distance: float = 3.0, max_tilt: float = 1.57, asset_name: str = "robot") -> torch.Tensor:
-    """Too low (near the ground), too high, too far from the environment origin, or tilted beyond ``max_tilt`` [rad]."""
-    state = FlightState.of(env.scene[asset_name], env.scene.env_origins)
-    height = state.position[:, 2]
-    distance = state.position[:, :2].norm(dim=-1)
-    tilt = torch.acos(state.rotation[:, 2, 2].clamp(-1.0, 1.0))
-    return (height < min_height) | (height > max_height) | (distance > max_distance) | (tilt > max_tilt)
+def left_flight_volume(env: ManagerBasedRLEnv, max_height: float = 4.0, max_distance: float = 3.0,
+                       asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Too high or too far from the environment origin. Too low and tilted are the Isaac Lab terms in ``cascade_env_cfg``."""
+    distance, height = pad_distance_and_height(env, asset_cfg)
+    return (height > max_height) | (distance > max_distance)
 
 
 # ── Landing ─────────────────────────────────────────────────────────────────────────────

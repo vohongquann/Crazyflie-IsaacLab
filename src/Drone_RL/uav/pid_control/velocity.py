@@ -2,8 +2,8 @@
 
 Test: velocity, attitude and rate layers fly. The setpoint steps the world velocity (vx, vy, vz).
 
-    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/velocity.py --live --viz kit
-    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/velocity.py        # no window, PNG only
+    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/velocity.py        # Isaac Sim window + live plot
+    ~/miniconda3/envs/env_isaaclab/bin/python src/Drone_RL/uav/pid_control/velocity.py --viz none --no_live   # PNG only
 """
 import torch
 
@@ -12,12 +12,18 @@ from Drone_RL.uav.pid_control.flight_test import LayerTest, run, step_table
 from Drone_RL.uav.pid_control.pid import PID
 
 
+VELOCITY_KP = (9.3, 9.3, 20.0)               # (x, y, z), output [m/s^2]
+VELOCITY_KI = (0.9, 0.9, 1.9)
+VELOCITY_INT_LIMIT = (2.0, 2.0, 1.0)         # limit of the integral term (anti-windup)
+VELOCITY_MAX_ACCELERATION = (7.0, 7.0, 6.0)  # [m/s^2] limit of the output
+
+
 class VelocityController:
     def __init__(self, device):
-        kp = torch.tensor([9.3, 9.3, 20.0], device=device)
-        ki = torch.tensor([0.9, 0.9, 1.9], device=device)
-        int_limit = torch.tensor([2.0, 2.0, 1.0], device=device)
-        out_limit = torch.tensor([7.0, 7.0, 6.0], device=device)     # [m/s^2]
+        kp = torch.tensor(VELOCITY_KP, device=device)
+        ki = torch.tensor(VELOCITY_KI, device=device)
+        int_limit = torch.tensor(VELOCITY_INT_LIMIT, device=device)
+        out_limit = torch.tensor(VELOCITY_MAX_ACCELERATION, device=device)
         self.pid = PID(kp=kp, ki=ki, int_limit=int_limit, out_limit=out_limit)
 
     def reset(self, env_ids=None) -> None:

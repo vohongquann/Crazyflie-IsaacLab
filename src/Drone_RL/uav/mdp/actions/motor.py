@@ -24,10 +24,12 @@ from Drone_RL.uav import uav_cfg as U
 G = 9.80665
 
 K_ETA, KV, V0, DZ = U.CF_K_ETA, U.CF_KV, U.CF_V0, U.CF_DZ
-PWM_MEASURED = (10_000.0, 45_000.0)
+
 """PWM range covered by the experiment. Outside it the curves are extrapolated."""
-VOLTAGES = (2.7, 3.3, U.CF_BATTERY_V_NOM, 4.1)
+PWM_MEASURED = (10_000.0, 45_000.0)
+
 """Battery voltages drawn [V]; the experiment covered 2.7 to 4.1 V. The simulation uses the nominal one."""
+VOLTAGES = (2.7, 3.3, U.CF_BATTERY_V_NOM, 4.1)
 
 
 def rotor_speed(pwm: np.ndarray, voltage: float) -> np.ndarray:
@@ -115,5 +117,5 @@ def main() -> None:
     print(f"Image: {args.output}")
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

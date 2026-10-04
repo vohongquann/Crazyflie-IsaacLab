@@ -1,6 +1,8 @@
-"""Landing task (``Isaac-UAV-Landing-ArUco-v0``): fly the Crazyflie from a random point above the pad down onto the ArUco marker.
+"""Landing task (``Isaac-UAV-Landing-ArUco-v0``): fly the Crazyflie from a random point above the pad down onto
+the ArUco marker.
 
-    policy:   position, orientation, velocities and action history (Eschmann et al. 2024) + ArUco detection (u, v, size, found)
+    policy:   position, orientation, velocities and action history (Eschmann et al. 2024),
+              plus the ArUco detection (u, v, size, found)
     action:   four motor commands (MotorAction), centred on the hover throttle
     reward:   stay above the pad, go down while aligned, touch down slowly, land on the marker (bonus)
     episode:  10 s, ends early on landing (success) or crash
@@ -25,7 +27,7 @@ from isaaclab.utils import configclass
 
 from Drone_RL.uav import mdp
 from Drone_RL.uav import uav_cfg as U
-from Drone_RL.uav.mdp.actions.constants import FW_TICK_HZ
+from Drone_RL.uav.mdp.actions.constants import FW_TICK_HZ, LANDING_HZ
 from Drone_RL.uav.mdp.actions.motor_action import MotorActionCfg
 from Drone_RL.uav.rl_control.marker_plate import ArucoPlateCfg
 
@@ -37,8 +39,14 @@ START_HEIGHT_M = 1.4         # upper end of the random starting height
 
 @configclass
 class LandingSceneCfg(InteractiveSceneCfg):
-    ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)))
-    light = AssetBaseCfg(prim_path="/World/light", spawn=sim_utils.DomeLightCfg(intensity=2500.0))
+    ground = AssetBaseCfg(
+        prim_path="/World/ground",
+        spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
+    )
+    light = AssetBaseCfg(
+        prim_path="/World/light",
+        spawn=sim_utils.DomeLightCfg(intensity=2500.0),
+    )
     marker = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Marker",
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.002)),
@@ -53,14 +61,26 @@ class LandingSceneCfg(InteractiveSceneCfg):
         width=CAMERA_PIXELS,
         height=CAMERA_PIXELS,
         data_types=["rgb"],
-        spawn=sim_utils.PinholeCameraCfg(focal_length=10.0, horizontal_aperture=20.0, clipping_range=(0.02, 10.0)),
-        offset=CameraCfg.OffsetCfg(pos=(0.0, 0.0, -0.01), rot=(0.7071068, -0.7071068, 0.0, 0.0), convention="ros"),
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=10.0,
+            horizontal_aperture=20.0,
+            clipping_range=(0.02, 10.0),
+        ),
+        offset=CameraCfg.OffsetCfg(
+            pos=(0.0, 0.0, -0.01),
+            rot=(0.7071068, -0.7071068, 0.0, 0.0),
+            convention="ros",
+        ),
     )
 
 
 @configclass
 class ActionsCfg:
-    motor = MotorActionCfg(asset_name="robot", offset=U.DRONE_HOVER_THROTTLE, scale=0.25)
+    motor = MotorActionCfg(
+        asset_name="robot",
+        offset=U.DRONE_HOVER_THROTTLE,
+        scale=0.25,
+    )
 
 
 @configclass
@@ -69,12 +89,22 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         # State list of Eschmann et al. 2024 (mdp/observations.py) ...
         position = ObsTerm(func=mdp.position_relative_to_target)
-        orientation = ObsTerm(func=mdp.orientation_matrix)
-        linear_velocity = ObsTerm(func=mdp.linear_velocity_world)
-        angular_velocity = ObsTerm(func=mdp.angular_velocity_body)
-        action_history = ObsTerm(func=mdp.ActionHistory, params={"history": ACTION_HISTORY})
+        orientation = ObsTerm(
+            func=isaac_mdp.root_quat_w,
+            params={"make_quat_unique": True},
+        )
+        linear_velocity = ObsTerm(func=isaac_mdp.root_lin_vel_w)
+        angular_velocity = ObsTerm(func=isaac_mdp.base_ang_vel)
+        action_history = ObsTerm(
+            func=isaac_mdp.last_action,
+            params={"action_name": "motor"},
+            history_length=ACTION_HISTORY,
+        )
         # ... plus what the downward camera says about the marker.
-        aruco = ObsTerm(func=mdp.ArucoObservation, params={"sensor_cfg": SceneEntityCfg("camera")})
+        aruco = ObsTerm(
+            func=mdp.ArucoObservation,
+            params={"sensor_cfg": SceneEntityCfg("camera")},
+        )
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -90,7 +120,12 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot"),
-            "pose_range": {"x": (-1.0, 1.0), "y": (-1.0, 1.0), "z": (0.7, START_HEIGHT_M - 0.1), "yaw": (-math.pi, math.pi)},
+            "pose_range": {
+                "x": (-1.0, 1.0),
+                "y": (-1.0, 1.0),
+                "z": (0.7, START_HEIGHT_M - 0.1),
+                "yaw": (-math.pi, math.pi),
+            },
             "velocity_range": {},
         },
     )
@@ -98,26 +133,59 @@ class EventCfg:
 
 @configclass
 class RewardsCfg:
-    alignment = RewTerm(func=mdp.alignment, weight=1.0)
-    descent = RewTerm(func=mdp.descent_over_pad, weight=6.0, params={"start_height": START_HEIGHT_M})
-    soft_touchdown = RewTerm(func=mdp.touchdown_speed_penalty, weight=-5.0)
-    upright = RewTerm(func=isaac_mdp.flat_orientation_l2, weight=-1.0)
-    spin = RewTerm(func=isaac_mdp.ang_vel_xy_l2, weight=-0.05)
-    action_rate = RewTerm(func=isaac_mdp.action_rate_l2, weight=-0.01)
-    landed = RewTerm(func=mdp.landed_bonus, weight=2500.0)
-    crashed = RewTerm(func=mdp.crashed_penalty, weight=-1000.0)
+    alignment = RewTerm(
+        func=mdp.alignment,
+        weight=1.0,
+    )
+    descent = RewTerm(
+        func=mdp.descent_over_pad,
+        weight=6.0,
+        params={"start_height": START_HEIGHT_M},
+    )
+    soft_touchdown = RewTerm(
+        func=mdp.touchdown_speed_penalty,
+        weight=-5.0,
+    )
+    upright = RewTerm(
+        func=isaac_mdp.flat_orientation_l2,
+        weight=-1.0,
+    )
+    spin = RewTerm(
+        func=isaac_mdp.ang_vel_xy_l2,
+        weight=-0.05,
+    )
+    action_rate = RewTerm(
+        func=isaac_mdp.action_rate_l2,
+        weight=-0.01,
+    )
+    landed = RewTerm(
+        func=isaac_mdp.is_terminated_term,
+        weight=2500.0,
+        params={"term_keys": "landed"},
+    )
+    crashed = RewTerm(
+        func=isaac_mdp.is_terminated_term,
+        weight=-1000.0,
+        params={"term_keys": "crashed"},
+    )
 
 
 @configclass
 class TerminationsCfg:
-    time_out = DoneTerm(func=isaac_mdp.time_out, time_out=True)
+    time_out = DoneTerm(
+        func=isaac_mdp.time_out,
+        time_out=True,
+    )
     landed = DoneTerm(func=mdp.landed)
     crashed = DoneTerm(func=mdp.crashed)
 
 
 @configclass
 class LandingEnvCfg(ManagerBasedRLEnvCfg):
-    scene: LandingSceneCfg = LandingSceneCfg(num_envs=16, env_spacing=4.0)
+    scene: LandingSceneCfg = LandingSceneCfg(
+        num_envs=16,
+        env_spacing=4.0,
+    )
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     events: EventCfg = EventCfg()
@@ -125,7 +193,7 @@ class LandingEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
 
     def __post_init__(self):
-        self.sim.dt = 1.0 / FW_TICK_HZ           # 500 Hz physics
-        self.decimation = 10                      # 50 Hz policy and camera
+        self.sim.dt = 1.0 / FW_TICK_HZ                          # 1000 Hz physics
+        self.decimation = int(round(FW_TICK_HZ / LANDING_HZ))   # 25 Hz policy and camera
         self.sim.render_interval = self.decimation
         self.episode_length_s = 10.0

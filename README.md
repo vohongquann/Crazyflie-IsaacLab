@@ -101,7 +101,8 @@ Train the RL layers bottom-up, each on top of the frozen ones below (video clips
 
 ```bash
 isaaclab train --rl_library rsl_rl --task Isaac-UAV-Rate-RL-v0 --num_envs 1024 --video --video_length 400 --video_interval 5000
-python -m Drone_RL.uav.rl_control.freeze --layer rate        # then Attitude, Velocity, Position the same way
+isaaclab play --rl_library rsl_rl --task Isaac-UAV-Rate-RL-v0 --num_envs 1
+cp logs/rsl_rl/uav_rate/<run>/exported/policy.pt src/Drone_RL/uav/rl_control/frozen/rate.pt   # then Attitude, Velocity, Position the same way
 ```
 
 Details: [guide/05_rl_cascade.md](guide/05_rl_cascade.md).
@@ -111,12 +112,12 @@ Details: [guide/05_rl_cascade.md](guide/05_rl_cascade.md).
 Read [guide/readme.md](guide/readme.md), then the pages in order:
 
 1. [The drone](guide/01_drone.md): every number and its source
-2. [Propulsion](guide/02_propulsion.md): motor curve, mixer, motor lag, force on the body
+2. [Propulsion](guide/02_propulsion.md): motor curve, mixer, force on the body
 3. [Kinematic flight](guide/03_kinematic_flight.md): can the motors fly a path?
 4. [PID cascade](guide/04_pid_cascade.md): position, velocity, attitude, rate
 5. [RL cascade](guide/05_rl_cascade.md): the same layers learned and frozen one by one
 6. [ArUco landing](guide/06_aruco_landing.md): camera, marker detection, landing policy
-7. [One simulation step](guide/07_simulation_step.md): what runs in which order, from PPO down to PhysX
+7. [Một bước mô phỏng, từ PPO đến PhysX](guide/07_simulation_step.md): cái gì chạy theo thứ tự nào, và Isaac Lab điều khiển PhysX ra sao
 
 ```
 src/Drone_RL/
@@ -126,14 +127,14 @@ src/Drone_RL/
                                    RL layers, commands, observations, rewards, terminations
   uav/pid_control/                 cascaded PID, layer tests, kinematic trajectory tool
   uav/rl_control/                  every RL task, one file each (rate, attitude, velocity, position, landing),
-                                   PPO in agents/, freeze.py, frozen/ weights
+                                   PPO in agents/, frozen/ weights
 tests/                             constants, mixer, PID, RL layers, ArUco (no simulator)
 ```
 
 ## 5. Known limitations
 
-Not found in any published source, so these are assumptions: the brushless motor time constant (range 0.05 to 0.15 s
-in the simulation; the PID is only tuned for the fast end), propeller mass, in-flight IMU vibration noise. The
+Not found in any published source, so these are assumptions: propeller mass, in-flight IMU vibration noise. The
+simulation has no motor lag: a motor gives the thrust of its PWM at once. The
 collision geometry of the USD is the Crazyflie 2.x one.
 
 ## 6. Development
