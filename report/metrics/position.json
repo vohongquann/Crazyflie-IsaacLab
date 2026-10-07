@@ -1,0 +1,45 @@
+{
+  "layer": "position",
+  "unit": "m",
+  "methods": {
+    "pid": {
+      "trained": true,
+      "random": {
+        "error": 0.1253434419631958,
+        "error_raw": 0.1253434419631958,
+        "error_unit": "m",
+        "flying": 1.0,
+        "motor_change": 0.0032056918572564434
+      },
+      "step_error": [
+        0.1193,
+        0.1288,
+        0.0118
+      ],
+      "step_error_mean": 0.0866
+    },
+    "rl": {
+      "trained": false,
+      "missing": [
+        "src/Drone_RL/uav/rl_control/frozen/rl/position.pt",
+        "src/Drone_RL/uav/rl_control/frozen/rl/velocity.pt"
+      ]
+    },
+    "gains": {
+      "trained": true,
+      "random": {
+        "error": 0.09669765084981918,
+        "error_raw": 0.09669765084981918,
+        "error_unit": "m",
+        "flying": 1.0,
+        "motor_change": 0.020170951486194043
+      },
+      "step_error": [
+        0.1174,
+        0.1134,
+        0.0144
+      ],
+      "step_error_mean": 0.0817
+    }
+  }
+}

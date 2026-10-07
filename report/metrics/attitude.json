@@ -1,0 +1,54 @@
+{
+  "layer": "attitude",
+  "unit": "deg",
+  "methods": {
+    "pid": {
+      "trained": true,
+      "random": {
+        "error": 15.495776528507573,
+        "error_raw": 0.2704523205757141,
+        "error_unit": "deg",
+        "flying": 1.0,
+        "motor_change": 0.0020551571762360125
+      },
+      "step_error": [
+        0.471,
+        0.4707,
+        4.7328
+      ],
+      "step_error_mean": 1.8915
+    },
+    "rl": {
+      "trained": true,
+      "random": {
+        "error": 6.937330505541333,
+        "error_raw": 0.12107925862073898,
+        "error_unit": "deg",
+        "flying": 1.0,
+        "motor_change": 0.02887102546949459
+      },
+      "step_error": [
+        1.3963,
+        0.7676,
+        5.6807
+      ],
+      "step_error_mean": 2.6149
+    },
+    "gains": {
+      "trained": true,
+      "random": {
+        "error": 5.909560778391426,
+        "error_raw": 0.10314129292964935,
+        "error_unit": "deg",
+        "flying": 1.0,
+        "motor_change": 0.005063977481222173
+      },
+      "step_error": [
+        0.1953,
+        0.1641,
+        3.6824
+      ],
+      "step_error_mean": 1.3473
+    }
+  }
+}

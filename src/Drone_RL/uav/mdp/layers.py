@@ -1,13 +1,16 @@
 """The four RL layers, the same cascade as the PID (inputs and outputs of the PID layer of the same name).
 
     position --> velocity --> attitude --> rate --> 4 motor commands
-    [p*, yaw*]   [v*, yaw*]   [a*, yaw*]   [w*, T*]
+    [p*, yaw*]   [v*, yaw*]   [roll*, pitch*,   [w*, T*]
+                              yaw*, T*]
 
 Every layer is a small network: it reads the command of the layer above plus the flight state, and writes the command
 of the layer below (the rate layer writes the motor commands). So an RL layer can replace a PID layer one to one. The
-wanted yaw is not decided by the position and velocity layers: it passes through them down to the attitude layer.
+wanted yaw is not decided by the position and velocity layers: it passes through them down to the attitude layer. The
+velocity layer writes roll, pitch and thrust directly (like the velocity controller of the Crazyflie firmware); the
+attitude layer writes body rates and passes the thrust through to the rate layer.
 
-A layer is trained with the layers below it frozen (``rl_control/frozen/``). ``Layer.observation`` lists its observation
+A layer is trained with the layers below it frozen (``rl_control/frozen/rl/``). ``Layer.observation`` lists its observation
 terms (``observations.py``, functions of ``env`` like those of Isaac Lab); the env cfg of the layer lists the same ones,
 and ``actions/cascade_action.FrozenLayer`` calls them when the layer runs frozen under a higher layer, so the frozen
 network sees exactly what it saw in training.
@@ -24,7 +27,7 @@ from Drone_RL.uav import uav_cfg as U
 from Drone_RL.uav.mdp import observations as obs
 from Drone_RL.uav.mdp.actions.constants import ATTITUDE_HZ, POSITION_HZ, RATE_HZ, VELOCITY_HZ
 from Drone_RL.uav.mdp.actions.propulsion import thrust_to_pwm
-from Drone_RL.uav.mdp.flight import GRAVITY, WEIGHT_N, thrust_axis
+from Drone_RL.uav.mdp.flight import GRAVITY, WEIGHT_N
 
 
 class Layer:
@@ -64,51 +67,47 @@ class RateLayer(Layer):
 
 
 class AttitudeLayer(Layer):
-    """[wanted acceleration (3) m/s^2 world, wanted yaw (1) rad] -> [wanted body rates (3), wanted thrust (1)]."""
+    """[wanted roll, pitch, yaw (3) rad, wanted total thrust (1) N] -> [wanted body rates (3), wanted thrust (1)]."""
 
-    name, hz, command_dim, action_dim, history, below = "attitude", ATTITUDE_HZ, 4, 4, 2, "rate"
+    name, hz, command_dim, action_dim, history, below = "attitude", ATTITUDE_HZ, 4, 3, 2, "rate"
     observation = (
-        obs.wanted_force_body,
-        obs.yaw_error,
+        obs.attitude_error,
+        obs.thrust_ratio,
         isaac_mdp.projected_gravity,
         isaac_mdp.base_ang_vel,
         obs.action_history,
     )
-    obs_dim = 3 + 1 + 3 + 3 + 8
+    obs_dim = 3 + 1 + 3 + 3 + 6
     RATE_SCALE = (6.0, 6.0, 3.0)    # [rad/s], the output limits of the PID attitude layer
-    THRUST_SCALE = 0.5              # thrust correction, times the weight
 
     def output(self, action, command, env):
-        """Rates from the network. Thrust: feedforward m (a* + g) . z_body (the formula of the PID attitude layer) plus
-        a learned correction of up to half the weight. The first run without the feedforward (thrust = mg (1 + a)) learned
-        a wrong thrust and the drone fell under the velocity layer."""
-        rates = action[:, :3] * torch.tensor(self.RATE_SCALE, device=action.device)
-        force_per_mass = command[:, :3] + torch.tensor([0.0, 0.0, GRAVITY], device=command.device)
-        up = thrust_axis(isaac_mdp.root_quat_w(env))
-        feedforward = U.DRONE_MASS_TOTAL_KG * (force_per_mass * up).sum(-1, keepdim=True)
-        thrust = (feedforward.clamp(min=0.0) + self.THRUST_SCALE * WEIGHT_N * action[:, 3:4]).clamp(min=0.0)
-        return torch.cat([rates, thrust], dim=-1)
+        """Body rates from the network; the thrust of the command goes through to the rate layer (as in the firmware)."""
+        rates = action * torch.tensor(self.RATE_SCALE, device=action.device)
+        return torch.cat([rates, command[:, 3:4]], dim=-1)
 
 
 class VelocityLayer(Layer):
-    """[wanted velocity (3) m/s world, wanted yaw (1)] -> [wanted acceleration (3) m/s^2 world, wanted yaw (1)]."""
+    """[wanted velocity (3) m/s world, wanted yaw (1)] -> [wanted roll, pitch, yaw (3) rad, wanted total thrust (1) N]."""
 
     name, hz, command_dim, action_dim, history, below = "velocity", VELOCITY_HZ, 4, 3, 2, "attitude"
     observation = (obs.velocity_error, isaac_mdp.root_lin_vel_w, obs.body_up_in_world, obs.action_history)
     obs_dim = 3 + 3 + 3 + 6
-    ACCELERATION_SCALE = (7.0, 7.0, 6.0)    # [m/s^2], the output limits of the PID velocity layer
+    TILT_SCALE = 0.6                # [rad] roll and pitch: the output limit of the PID velocity layer
+    THRUST_SCALE = 0.6              # thrust = weight (1 + 0.6 a): 0.27 N more or less than hover, the limit of the PID
 
     def output(self, action, command, env):
-        acceleration = action * torch.tensor(self.ACCELERATION_SCALE, device=action.device)
-        return torch.cat([acceleration, command[:, 3:4]], dim=-1)
+        """The action [roll, pitch, thrust correction] in [-1, 1]; action 0 is a level drone at the hover thrust."""
+        thrust = (WEIGHT_N * (1.0 + self.THRUST_SCALE * action[:, 2:3])).clamp(min=0.0)
+        return torch.cat([self.TILT_SCALE * action[:, :2], command[:, 3:4], thrust], dim=-1)
 
 
 class PositionLayer(Layer):
-    """[target position (3) m, relative to the environment origin, wanted yaw (1)] -> [wanted velocity (3), yaw (1)]."""
+    """[target position (3) m, relative to the environment origin, wanted yaw (1), velocity of the target (3) m/s]
+    -> [wanted velocity (3), yaw (1)]. The target velocity is 0 for a fixed target."""
 
-    name, hz, command_dim, action_dim, history, below = "position", POSITION_HZ, 4, 3, 2, "velocity"
-    observation = (obs.position_error, isaac_mdp.root_lin_vel_w, obs.action_history)
-    obs_dim = 3 + 3 + 6
+    name, hz, command_dim, action_dim, history, below = "position", POSITION_HZ, 7, 3, 2, "velocity"
+    observation = (obs.position_error, isaac_mdp.root_lin_vel_w, obs.target_velocity, obs.action_history)
+    obs_dim = 3 + 3 + 3 + 6
     VELOCITY_SCALE = 1.5          # [m/s] per axis, inside what the velocity layer was trained on
 
     def output(self, action, command, env):

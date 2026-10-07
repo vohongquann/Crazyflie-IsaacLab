@@ -23,6 +23,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
+from isaaclab.visualizers import VisualizerCfg
 
 from Drone_RL.uav import mdp
 from Drone_RL.uav import uav_cfg as U
@@ -33,14 +34,19 @@ from Drone_RL.uav.mdp.layers import LAYERS
 
 START_HEIGHT_M = 1.5
 FROZEN_DIR = Path(__file__).resolve().parent / "frozen"
-"""``<layer>.pt`` of the four layers: the ``exported/policy.pt`` that ``play`` writes in the run folder, copied here."""
+FROZEN_RL_DIR = FROZEN_DIR / "rl"
+"""``<layer>.pt`` of the RL cascade: the ``exported/policy.pt`` that ``play`` writes in the run folder, copied here."""
+FROZEN_GAINS_DIR = FROZEN_DIR / "gains"
+"""``<layer>.pt`` of the gain cascade, same way."""
 
 
 @configclass
 class FlightSceneCfg(InteractiveSceneCfg):
     ground = AssetBaseCfg(
         prim_path="/World/ground",
-        spawn=sim_utils.GroundPlaneCfg(size=(200.0, 200.0), color=(0.0, 0.0, 0.0)),
+        # Hidden (still collides): even tinted black the grid reflected the dome light as grey squares. Behind the
+        # drone the camera then sees the visualizer background, set to black in LayerEnvCfg.
+        spawn=sim_utils.GroundPlaneCfg(size=(200.0, 200.0), visible=True, color=(0.0, 0.0, 0.0))
     )
     light = AssetBaseCfg(
         prim_path="/World/light",
@@ -57,7 +63,7 @@ class ActionsCfg:
     # layer: set by LayerEnvCfg
     cascade = CascadeActionCfg(
         asset_name="robot",
-        frozen_dir=str(FROZEN_DIR),
+        frozen_dir=str(FROZEN_RL_DIR),
     )
 
 
@@ -146,7 +152,7 @@ class LayerEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: FlightSceneCfg = FlightSceneCfg(
         num_envs=4096,
-        env_spacing=4.0,
+        env_spacing=2.0,
     )
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -165,6 +171,7 @@ class LayerEnvCfg(ManagerBasedRLEnvCfg):
         # fast layers (rate 2 ms), and one render per step made the drone run in slow motion in the window.
         self.sim.render_interval = max(self.decimation, int(FW_TICK_HZ // 120))
         self.episode_length_s = self.EPISODE_S
+        self.sim.default_visualizer_cfg = VisualizerCfg(background_color=(0.0, 0.0, 0.0))     # window and video
         # Video (--video) and the window follow the drone of environment 0.
         # self.viewer = ViewerCfg(
         #     eye=(0.6, 0.6, 0.3),

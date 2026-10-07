@@ -127,6 +127,7 @@ class CascadeAction(ActionTerm):
         # RATE_DO_EXECUTE on the firmware tick. The periods need not divide the env step (velocity 5 over attitude 2).
         self._tick = 0
         self.velocity_at_step_start = torch.zeros(self.num_envs, 3, device=self.device)
+        self._no_command = torch.zeros(self.num_envs, self.layer.command_dim, device=self.device)
 
     @property
     def action_dim(self) -> int:
@@ -151,7 +152,10 @@ class CascadeAction(ActionTerm):
 
     @property
     def command(self) -> torch.Tensor:
-        """What the layers above ask of the layer in training."""
+        """What the layers above ask of the layer in training; zeros without a command term (landing task: the
+        policy takes the place of the position layer, the wanted yaw is 0)."""
+        if self.cfg.command_name is None:
+            return self._no_command
         return self._env.command_manager.get_command(self.cfg.command_name)
 
     def reset(self, env_ids=None):
@@ -188,7 +192,7 @@ class CascadeActionCfg(MotorActionCfg):
 
     class_type: type[ActionTerm] = CascadeAction
     layer: str = MISSING                  # "rate", "attitude", "velocity" or "position"
-    command_name: str = "layer"
-    frozen_dir: str = MISSING             # folder of the frozen <layer>.pt files (rl_control/frozen/)
+    command_name: str | None = "layer"    # None: no command term (zeros)
+    frozen_dir: str = MISSING             # folder of the frozen <layer>.pt files (rl_control/frozen/rl/)
     pid_rate: bool = False                # rate below = PID rate controller instead of the frozen rate network
     spin_propellers: bool = False         # visual only; a joint write per environment every 2 ms slows training

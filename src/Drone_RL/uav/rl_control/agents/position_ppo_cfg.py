@@ -6,5 +6,6 @@ from Drone_RL.uav.rl_control.agents.cascade_ppo_cfg import LayerPPORunnerCfg, ex
 
 @configclass
 class PositionPPORunnerCfg(LayerPPORunnerCfg):
+    max_iterations = 1000
     experiment_name = experiment_name("position")
     actor = make_actor(init_std=0.2)

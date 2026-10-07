@@ -1,7 +1,7 @@
-"""Attitude layer task (``Isaac-UAV-Attitude-RL-v0``): acceleration and yaw -> body rates and thrust, 250 Hz.
+"""Attitude layer task (``Isaac-UAV-Attitude-RL-v0``): roll, pitch, yaw and thrust -> body rates (thrust passes through), 250 Hz.
 
-Rate below: the frozen rate network (``AttitudeEnvCfg``) or the PID rate controller (``AttitudePIDRateEnvCfg``,
-``Isaac-UAV-Attitude-PIDRate-RL-v0``). The command comes from the PID position and velocity layers. Everything else is
+Rate below: the frozen rate network. The command comes from the PID position and velocity layers (the velocity layer writes
+roll, pitch and thrust). Everything else is
 ``cascade_env_cfg.py``.
 """
 from isaaclab.envs import mdp as isaac_mdp
@@ -10,6 +10,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 
 from Drone_RL.uav import mdp
+from Drone_RL.uav import uav_cfg as U
 from Drone_RL.uav.mdp.commands import LayerCommandCfg
 from Drone_RL.uav.rl_control.cascade_env_cfg import (
     CommandsCfg,
@@ -22,10 +23,11 @@ from Drone_RL.uav.rl_control.cascade_env_cfg import (
 
 @configclass
 class AttitudePolicyCfg(PolicyCfg):
-    """Wanted force in the body frame, yaw error, gravity direction in the body frame, body rates, last 2 outputs (18)."""
+    """Roll, pitch and yaw error, wanted thrust / weight, gravity direction in the body frame, body rates, last 2
+    outputs (16)."""
 
-    wanted_force_body = ObsTerm(func=mdp.wanted_force_body)
-    yaw_error = ObsTerm(func=mdp.yaw_error)
+    attitude_error = ObsTerm(func=mdp.attitude_error)
+    thrust_ratio = ObsTerm(func=mdp.thrust_ratio)
     gravity_in_body = ObsTerm(func=isaac_mdp.projected_gravity)
     body_rates = ObsTerm(func=isaac_mdp.base_ang_vel)
     action_history = ObsTerm(func=mdp.action_history)
@@ -33,6 +35,12 @@ class AttitudePolicyCfg(PolicyCfg):
 
 @configclass
 class AttitudeRewardsCfg(RewardsCfg):
+    # At -0.05 the policy changed its output by 0.6 (summed squares) every 4 ms: the wanted rates chattered by about
+    # +-0.4 of their range and the motors changed 18 times more per step than under the PID attitude layer.
+    output_change = RewTerm(
+        func=isaac_mdp.action_rate_l2,
+        weight=-0.5,
+    )
     tilt_error = RewTerm(
         func=mdp.tilt_error_l2,
         weight=-1.0,
@@ -42,10 +50,21 @@ class AttitudeRewardsCfg(RewardsCfg):
         weight=1.0,
         params={"std": 0.4},
     )
-    acceleration = RewTerm(
-        func=mdp.acceleration_error_exp,
-        weight=1.0,
-        params={"std": 2.0},
+    # With the fine term alone the yaw error stayed at 0.6 rad (PID: 0.43): far from the target yaw it pays nothing.
+    yaw_coarse = RewTerm(
+        func=mdp.yaw_error_exp,
+        weight=0.5,
+        params={"std": 1.5},
+    )
+    roll = RewTerm(
+        func=mdp.roll_error_exp,
+        weight=0.5,
+        params={"std": 0.15},
+    )
+    pitch = RewTerm(
+        func=mdp.pitch_error_exp,
+        weight=0.5,
+        params={"std": 0.15},
     )
     spin = RewTerm(
         func=mdp.body_rates_l2,
@@ -57,16 +76,8 @@ class AttitudeRewardsCfg(RewardsCfg):
 class AttitudeEnvCfg(LayerEnvCfg):
     LAYER = "attitude"
     commands: CommandsCfg = CommandsCfg(
-        layer=LayerCommandCfg(offset=(2.0, 2.0, 1.5, 0.0)),     # [m/s^2]
+        # roll, pitch [rad] (a tilt of 2 m/s^2), yaw, thrust [N] (1.5 m/s^2 up or down)
+        layer=LayerCommandCfg(offset=(0.25, 0.25, 0.0, 1.5 * U.DRONE_MASS_TOTAL_KG)),
     )
     observations: ObservationsCfg = ObservationsCfg(policy=AttitudePolicyCfg())
     rewards: AttitudeRewardsCfg = AttitudeRewardsCfg()
-
-
-@configclass
-class AttitudePIDRateEnvCfg(AttitudeEnvCfg):
-    """Same task, with the PID rate controller (``pid_control/rate.py``) under the policy, not the rate network."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.actions.cascade.pid_rate = True

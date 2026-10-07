@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from isaaclab.managers import ObservationTermCfg
-from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse
+from isaaclab.utils.math import matrix_from_quat, quat_apply_inverse, wrap_to_pi
 from rsl_rl.models import MLPModel
 from tensordict import TensorDict
 
@@ -95,16 +95,30 @@ def test_attitude_layer_frames_with_a_tilted_drone():
     layer, n = LAYERS["attitude"], 6
     env = _FakeEnv(n).observe_as(layer, command=torch.randn(n, 4), history=torch.zeros(n, layer.history, layer.action_dim))
     command = env.cascade.observing.command
-    force_per_mass = command[:, :3] + torch.tensor([0.0, 0.0, GRAVITY])
     obs = layer.observe(env)
     rotation = matrix_from_quat(env.values["root_quat_w"])       # the check is done with the matrix, independent of quat_apply
-    rotation_t = rotation.transpose(1, 2)
-    assert torch.allclose(obs[:, :3], (rotation_t @ force_per_mass.unsqueeze(-1)).squeeze(-1) / GRAVITY, atol=1e-5)
-    gravity_in_body = (rotation_t @ torch.tensor([0.0, 0.0, -1.0])).squeeze(-1)
+    roll = torch.atan2(rotation[:, 2, 1], rotation[:, 2, 2])
+    pitch = -torch.asin(rotation[:, 2, 0])
+    yaw = torch.atan2(rotation[:, 1, 0], rotation[:, 0, 0])
+    expected = wrap_to_pi(command[:, :3] - torch.stack([roll, pitch, yaw], dim=-1))
+    assert torch.allclose(obs[:, :3], expected, atol=1e-5)
+    assert torch.allclose(obs[:, 3], command[:, 3] / WEIGHT_N, atol=1e-6)
+    gravity_in_body = (rotation.transpose(1, 2) @ torch.tensor([0.0, 0.0, -1.0])).squeeze(-1)
     assert torch.allclose(obs[:, 4:7], gravity_in_body, atol=1e-5)
-    thrust = layer.output(torch.zeros(n, 4), command, env)[:, 3]
-    expected = (U.DRONE_MASS_TOTAL_KG * (force_per_mass * rotation[:, :, 2]).sum(-1)).clamp(min=0.0)
-    assert torch.allclose(thrust, expected, atol=1e-5)
+    out = layer.output(torch.ones(n, 3), command, env)
+    assert torch.allclose(out[:, :3], torch.tensor(layer.RATE_SCALE).expand(n, 3))
+    assert torch.equal(out[:, 3], command[:, 3])                 # the thrust goes through
+
+
+def test_velocity_layer_writes_roll_pitch_and_thrust():
+    layer, n = LAYERS["velocity"], 4
+    command = torch.randn(n, 4)
+    out = layer.output(torch.zeros(n, 3), command, _FakeEnv(n))
+    assert torch.allclose(out[:, :2], torch.zeros(n, 2)) and torch.equal(out[:, 2], command[:, 3])
+    assert torch.allclose(out[:, 3], torch.full((n,), WEIGHT_N))        # action 0: hover thrust
+    out = layer.output(torch.ones(n, 3), command, _FakeEnv(n))
+    assert torch.allclose(out[:, :2], torch.full((n, 2), layer.TILT_SCALE))
+    assert torch.allclose(out[:, 3], torch.full((n,), WEIGHT_N * (1.0 + layer.THRUST_SCALE)))
 
 
 def test_frozen_layer_sees_what_the_layer_saw_in_training(monkeypatch):
@@ -180,3 +194,46 @@ def test_env_cfg_lists_the_observation_terms_of_every_layer():
         assert abs(cfg.sim.dt * cfg.decimation - 1.0 / layer.hz) < 1e-9       # one env step = one period of the layer
         env = _FakeEnv(4).observe_as(layer)
         assert torch.cat([t.func(env) for t in terms], dim=-1).shape[-1] == layer.obs_dim
+
+
+def test_path_slope_is_the_derivative_of_the_path():
+    from Drone_RL.uav.mdp.commands import PATH_TYPES, path_point
+
+    n = 64
+    path_type = torch.arange(n) % len(PATH_TYPES)
+    radius, spin, phase = torch.rand(n) + 0.3, torch.where(torch.rand(n) < 0.5, 1.0, -1.0), torch.rand(n) * 6.28
+    position, slope = path_point(path_type, radius, spin, phase)
+    eps = 1e-3
+    ahead, _ = path_point(path_type, radius, spin, phase + eps)
+    assert torch.allclose((ahead - position) / eps, slope, atol=2e-2)
+    start, _ = path_point(path_type, radius, spin, torch.zeros(n))
+    assert torch.allclose(start[path_type == 0, 0], radius[path_type == 0])       # circle starts on +x
+    assert torch.allclose(start[path_type == 1], torch.zeros(int((path_type == 1).sum()), 2), atol=1e-6)   # figure 8 at the center
+
+
+def test_position_command_puts_the_path_under_the_drone_and_carries_the_target_velocity():
+    from Drone_RL.uav.mdp.commands import LayerCommand
+    from Drone_RL.uav.rl_control.position_env_cfg import PositionEnvCfg
+
+    n = 32
+    cfg = PositionEnvCfg().commands.layer
+    env = _FakeEnv(n)
+    env.values["root_pos_w"][:, 2] = 1.5
+    command = object.__new__(LayerCommand)           # only the path functions run: no simulator, no command manager
+    command.__dict__.update(cfg=cfg, _env=env, device="cpu", num_envs=n, target=torch.zeros(n, 4),
+                            target_velocity=torch.zeros(n, 3), _goal=torch.zeros(n, 3),
+                            _on_path=torch.zeros(n, dtype=torch.bool), _center=torch.zeros(n, 2),
+                            _height=torch.zeros(n), _radius=torch.ones(n), _speed=torch.zeros(n), _spin=torch.ones(n),
+                            _phase=torch.zeros(n), _path_type=torch.zeros(n, dtype=torch.long),
+                            _path_codes=torch.arange(2))
+    command._resample_command(list(range(n)))
+    on = command._on_path
+    assert on.any() and not on.all()
+    start = env.values["root_pos_w"]
+    assert torch.allclose(command.target[on, :3], start[on], atol=1e-5)               # the path starts under the drone
+    assert torch.allclose(command.target[~on, :3], command._goal[~on])                # fixed target elsewhere
+    assert (command.target_velocity[~on] == 0).all()
+    before = command.target[:, :3].clone()
+    command._follow_path(0.02)
+    speed = (command.target[:, :3] - before).norm(dim=-1)[on] / 0.02
+    assert torch.allclose(speed, command.target_velocity.norm(dim=-1)[on], rtol=0.1, atol=0.03)

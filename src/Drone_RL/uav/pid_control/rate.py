@@ -11,7 +11,6 @@ Run it with F5 ("Debug: file đang mở") to break in ``RateController.update`` 
 import torch
 
 from Drone_RL.uav import uav_cfg as U
-from Drone_RL.uav.pid_control.attitude import GRAVITY
 from Drone_RL.uav.pid_control.flight_test import LayerTest, run, step_table
 from Drone_RL.uav.pid_control.pid import PID
 
@@ -52,8 +51,7 @@ def _control(controller, wanted, state, dt):
     hold_point = state.pos.clone()
     hold_point[:, 2] = TEST.start_z
     wanted_velocity = controller.position.update(hold_point, state.pos, dt) * torch.tensor([0.0, 0.0, 1.0], device=state.pos.device)
-    vertical_acceleration = controller.velocity.update(wanted_velocity, state.vel, dt)[:, 2]
-    thrust = controller.attitude.mass * (GRAVITY + vertical_acceleration)
+    thrust = controller.velocity.update(torch.cat([wanted_velocity, torch.zeros_like(wanted_velocity[:, :1])], dim=-1), state.vel, dt)[:, 3]
     return controller.to_pwm(thrust, torque)
 
 

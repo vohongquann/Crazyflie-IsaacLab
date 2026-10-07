@@ -82,14 +82,20 @@ DRONE_KM = 7.73e-11 / 3.72e-8
 CF_KD_DRAG = 5.09e-6
 
 
+"""Scale on the thrust of the Folk curve: 2 doubles the thrust at every PWM (thrust to weight 2.1 -> 4.2). At 1 the
+hover throttle was 0.61 and little was left for the torques; the rate policy was weak and the drone jerked around
+the target. The yaw torque (DRONE_KM times the thrust) scales with it."""
+CF_THRUST_SCALE = 2.0
+
+
 def motor_thrust_n(pwm, voltage: float = CF_BATTERY_V_NOM):
     """Thrust of one motor [N] from the PWM command and the battery voltage (numpy or torch)."""
     speed = CF_KV * (voltage + CF_V0) * (pwm - CF_DZ).clip(0.0) ** (2.0 / 3.0)
-    return CF_K_ETA * speed**2
+    return CF_THRUST_SCALE * CF_K_ETA * speed**2
 
 
-"""Maximum thrust per motor [N] at full command and nominal voltage (0.232 N, extrapolated). The datasheet
-quotes up to 30 g (0.294 N) with a full battery."""
+"""Maximum thrust per motor [N] at full command and nominal voltage (0.232 N extrapolated from Folk, times
+CF_THRUST_SCALE). The datasheet quotes up to 30 g (0.294 N) with a full battery."""
 CF_F_MAX_N = float(motor_thrust_n(np.array(CF_PWM_MAX)))
 
 
@@ -116,9 +122,9 @@ def _hover_throttle() -> float:
 """Hover throttle at the nominal voltage (0.50 for 34 g)."""
 DRONE_HOVER_THROTTLE = _hover_throttle()
 
-"""Linear air drag [N s/m] at hover (0.029): kd times the sum of the four rotor speeds at hover.
+"""Linear air drag [N s/m] at hover (0.024 with CF_THRUST_SCALE 2): kd times the sum of the four rotor speeds at hover.
 The horizontal drag force is -CF_DRAG_COEF * v."""
-CF_DRAG_COEF = CF_KD_DRAG * 4 * math.sqrt(DRONE_MASS_TOTAL_KG * 9.81 / 4 / CF_K_ETA)
+CF_DRAG_COEF = CF_KD_DRAG * 4 * math.sqrt(DRONE_MASS_TOTAL_KG * 9.81 / 4 / (CF_THRUST_SCALE * CF_K_ETA))
 
 
 # ── Articulation ────────────────────────────────────────────────────────────────────────

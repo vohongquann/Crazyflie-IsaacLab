@@ -1,8 +1,11 @@
 """Cascade of the four layers, each in its own file (pure torch, no Isaac).
 
     position.py --> velocity.py --> attitude.py --> rate.py --> to_pwm
-    target pos      wanted vel      wanted accel     wanted      thrust, torque
-                                                     rates       -> PWM of the 4 motors
+    target pos      wanted vel      roll, pitch,     wanted      thrust, torque
+                                    yaw, thrust      rates       -> PWM of the 4 motors
+
+The velocity layer gives the roll, pitch and thrust the attitude layer takes (like the velocity controller of the
+firmware).
 
 Every layer takes what the layer above wants and returns what the layer below must follow, so a caller can enter the
 chain anywhere, e.g. ``cascade.velocity.update(...)`` with a wanted velocity from a planner or a policy.
@@ -38,10 +41,11 @@ class CascadePID:
         return thrust_to_pwm(motor_forces, a, b, c, GRAVITY, U.CF_PWM_MAX)
 
     def step(self, target: torch.Tensor, pos: torch.Tensor, vel: torch.Tensor, quat: torch.Tensor,
-             body_rates: torch.Tensor, dt: float) -> torch.Tensor:
+             body_rates: torch.Tensor, dt: float, wanted_yaw: float = 0.0) -> torch.Tensor:
         """All layers: target position -> PWM (N, 4)."""
         wanted_velocity = self.position.update(target, pos, dt)
-        wanted_acceleration = self.velocity.update(wanted_velocity, vel, dt)
-        thrust, wanted_rates = self.attitude.update(wanted_acceleration, quat, dt)
+        yaw = torch.full_like(wanted_velocity[:, :1], wanted_yaw)
+        attitude_command = self.velocity.update(torch.cat([wanted_velocity, yaw], dim=-1), vel, dt)
+        thrust, wanted_rates = self.attitude.update(attitude_command, quat, dt)
         torque = self.rate.update(wanted_rates, body_rates, dt)
         return self.to_pwm(thrust, torque)

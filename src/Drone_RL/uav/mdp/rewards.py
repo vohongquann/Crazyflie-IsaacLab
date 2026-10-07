@@ -15,7 +15,7 @@ from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import euler_xyz_from_quat, wrap_to_pi
 
-from Drone_RL.uav.mdp.flight import WEIGHT_N, tilt_error
+from Drone_RL.uav.mdp.flight import WEIGHT_N, tilt_error, up_axis_from_angles
 from Drone_RL.uav.mdp.terminations import linear_speed, pad_distance_and_height
 
 if TYPE_CHECKING:
@@ -31,10 +31,22 @@ def rate_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.
     return (command[:, :3] - isaac_mdp.base_ang_vel(env)).square().sum(-1)
 
 
+def rate_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "layer") -> torch.Tensor:
+    """Body rates against the wanted ones (rate layer)."""
+    command = env.command_manager.get_command(command_name)
+    return torch.exp(-(command[:, :3] - isaac_mdp.base_ang_vel(env)).square().sum(-1) / std**2)
+
+
 def velocity_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
     """Squared error of the velocity to the wanted one (velocity layer)."""
     command = env.command_manager.get_command(command_name)
     return (command[:, :3] - isaac_mdp.root_lin_vel_w(env)).square().sum(-1)
+
+
+def velocity_axis_error_exp(env: ManagerBasedRLEnv, std: float, axis: int, command_name: str = "layer") -> torch.Tensor:
+    """One axis (0 x, 1 y, 2 z) of the velocity against the wanted one (velocity layer)."""
+    command = env.command_manager.get_command(command_name)
+    return torch.exp(-(command[:, axis] - isaac_mdp.root_lin_vel_w(env)[:, axis]).square() / std**2)
 
 
 def position_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
@@ -43,30 +55,75 @@ def position_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> to
     return (command[:, :3] - isaac_mdp.root_pos_w(env)).square().sum(-1)
 
 
-def tilt_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
-    """Squared angle between the body up axis and the thrust direction the wanted acceleration needs (attitude layer)."""
+def position_axis_error_exp(env: ManagerBasedRLEnv, std: float, axis: int, command_name: str = "layer") -> torch.Tensor:
+    """One axis (0 x, 1 y, 2 z) of the position against the target (position layer)."""
     command = env.command_manager.get_command(command_name)
-    return tilt_error(isaac_mdp.root_quat_w(env), command[:, :3]).square()
+    return torch.exp(-(command[:, axis] - isaac_mdp.root_pos_w(env)[:, axis]).square() / std**2)
+
+
+def velocity_overshoot(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Speed beyond the wanted velocity, along the wanted direction: the overshoot of a step response (velocity layer)."""
+    command = env.command_manager.get_command(command_name)[:, :3]
+    direction = command / (command.norm(dim=-1, keepdim=True) + 0.05)
+    return ((isaac_mdp.root_lin_vel_w(env) - command) * direction).sum(-1).clamp(min=0.0)
+
+
+def velocity_ringing(
+    env: ManagerBasedRLEnv,
+    std: float,
+    command_name: str = "layer",
+    action_name: str = "cascade",
+) -> torch.Tensor:
+    """Acceleration squared while the velocity is near the wanted one: no oscillation once settled (velocity layer)."""
+    command = env.command_manager.get_command(command_name)
+    velocity = isaac_mdp.root_lin_vel_w(env)
+    acceleration = (velocity - env.action_manager.get_term(action_name).velocity_at_step_start) / env.step_dt
+    return acceleration.square().sum(-1) * torch.exp(-(command[:, :3] - velocity).square().sum(-1) / std**2)
+
+
+def position_overshoot(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Speed away from the target, relative to the target: 0 while approaching, positive after passing it (position layer)."""
+    command = env.command_manager.get_command(command_name)
+    error = command[:, :3] - isaac_mdp.root_pos_w(env)
+    direction = error / (error.norm(dim=-1, keepdim=True) + 0.05)
+    relative_velocity = isaac_mdp.root_lin_vel_w(env) - command[:, 4:7]
+    return (-(relative_velocity * direction).sum(-1)).clamp(min=0.0)
+
+
+def position_settling(env: ManagerBasedRLEnv, std: float, command_name: str = "layer") -> torch.Tensor:
+    """Speed squared relative to the target, near it: a slow arrival and a still hover (position layer)."""
+    command = env.command_manager.get_command(command_name)
+    error = command[:, :3] - isaac_mdp.root_pos_w(env)
+    relative_velocity = isaac_mdp.root_lin_vel_w(env) - command[:, 4:7]
+    return relative_velocity.square().sum(-1) * torch.exp(-error.square().sum(-1) / std**2)
+
+
+def tilt_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:
+    """Squared angle between the body up axis and the one of the wanted roll, pitch and yaw (attitude layer)."""
+    command = env.command_manager.get_command(command_name)
+    wanted_up = up_axis_from_angles(command[:, 0], command[:, 1], command[:, 2])
+    return tilt_error(isaac_mdp.root_quat_w(env), wanted_up).square()
+
+
+def roll_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "layer") -> torch.Tensor:
+    """Roll against the wanted roll (attitude layer)."""
+    command = env.command_manager.get_command(command_name)
+    roll = euler_xyz_from_quat(isaac_mdp.root_quat_w(env))[0]
+    return torch.exp(-wrap_to_pi(command[:, 0] - roll).square() / std**2)
+
+
+def pitch_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "layer") -> torch.Tensor:
+    """Pitch against the wanted pitch (attitude layer)."""
+    command = env.command_manager.get_command(command_name)
+    pitch = euler_xyz_from_quat(isaac_mdp.root_quat_w(env))[1]
+    return torch.exp(-wrap_to_pi(command[:, 1] - pitch).square() / std**2)
 
 
 def yaw_error_exp(env: ManagerBasedRLEnv, std: float, command_name: str = "layer") -> torch.Tensor:
     """Heading against the wanted yaw (attitude layer)."""
     command = env.command_manager.get_command(command_name)
     yaw = euler_xyz_from_quat(isaac_mdp.root_quat_w(env))[2]
-    return torch.exp(-wrap_to_pi(command[:, 3] - yaw).square() / std**2)
-
-
-def acceleration_error_exp(
-    env: ManagerBasedRLEnv,
-    std: float,
-    command_name: str = "layer",
-    action_name: str = "cascade",
-) -> torch.Tensor:
-    """Acceleration over the last policy step (velocity change / step time) against the wanted one (attitude layer)."""
-    command = env.command_manager.get_command(command_name)
-    velocity_before = env.action_manager.get_term(action_name).velocity_at_step_start
-    achieved = (isaac_mdp.root_lin_vel_w(env) - velocity_before) / env.step_dt
-    return torch.exp(-(command[:, :3] - achieved).square().sum(-1) / std**2)
+    return torch.exp(-wrap_to_pi(command[:, 2] - yaw).square() / std**2)
 
 
 def thrust_error_exp(

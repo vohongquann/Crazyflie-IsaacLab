@@ -25,10 +25,10 @@ import torch
 
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
-from isaaclab.utils.math import euler_xyz_from_quat, quat_apply_inverse, wrap_to_pi
+from isaaclab.utils.math import euler_xyz_from_quat, wrap_to_pi
 
 from Drone_RL.uav.mdp.aruco import ArucoDetector
-from Drone_RL.uav.mdp.flight import GRAVITY, WEIGHT_N, thrust_axis
+from Drone_RL.uav.mdp.flight import WEIGHT_N, thrust_axis
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -55,24 +55,23 @@ def position_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torc
     return layer.command[:, :3] - isaac_mdp.root_pos_w(env)
 
 
+def target_velocity(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Velocity of the moving target (3): the feed-forward of a trajectory, 0 for a fixed target."""
+    layer = env.action_manager.get_term(action_name).observing
+    return layer.command[:, 4:7]
+
+
 def thrust_ratio(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
     """Wanted total thrust / weight (1)."""
     layer = env.action_manager.get_term(action_name).observing
     return layer.command[:, 3:4] / WEIGHT_N
 
 
-def wanted_force_body(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
-    """Wanted force per mass (a* + g) in the body frame, divided by g (3)."""
+def attitude_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
+    """Wanted [roll, pitch, yaw] minus the measured ones, wrapped to [-pi, pi] (3)."""
     layer = env.action_manager.get_term(action_name).observing
-    force_per_mass = layer.command[:, :3] + torch.tensor([0.0, 0.0, GRAVITY], device=env.device)
-    return quat_apply_inverse(isaac_mdp.root_quat_w(env), force_per_mass) / GRAVITY
-
-
-def yaw_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:
-    """Wanted yaw minus yaw, wrapped to [-pi, pi] (1)."""
-    layer = env.action_manager.get_term(action_name).observing
-    yaw = euler_xyz_from_quat(isaac_mdp.root_quat_w(env))[2]
-    return wrap_to_pi(layer.command[:, 3] - yaw).unsqueeze(-1)
+    angles = torch.stack(euler_xyz_from_quat(isaac_mdp.root_quat_w(env)), dim=-1)
+    return wrap_to_pi(layer.command[:, :3] - angles)
 
 
 def body_up_in_world(env: ManagerBasedRLEnv) -> torch.Tensor:

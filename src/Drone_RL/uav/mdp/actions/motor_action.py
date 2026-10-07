@@ -88,12 +88,12 @@ class MotorActionCfg(ActionTermCfg):
     motor_xy: tuple = CF_MOTOR_XY
     motor_spin: tuple[float, float, float, float] = CF_MOTOR_SPIN
 
-    use_air_drag: bool = True
+    use_air_drag: bool = False
     drag_coef: float = CF_DRAG_COEF
     drag_scale: tuple[float, float] = (0.5, 1.5)
     use_thrust_noise: bool = False
     thrust_noise_std: float = 0.01
-    use_motor_asymmetry: bool = True
+    use_motor_asymmetry: bool = False
     motor_strength_range: tuple[float, float] = (0.9, 1.1)
     spin_propellers: bool = True   # turn the propeller joints with the rotor speed (visual only)
     spin_visual_scale: float = SPIN_VISUAL_SCALE   # picture speed / rotor speed

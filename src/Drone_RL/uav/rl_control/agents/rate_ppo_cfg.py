@@ -6,7 +6,9 @@ from Drone_RL.uav.rl_control.agents.cascade_ppo_cfg import LayerPPORunnerCfg, ex
 
 @configclass
 class RatePPORunnerCfg(LayerPPORunnerCfg):
-    num_steps_per_env = 32
+    num_steps_per_env = 64
     max_iterations = 1500
     experiment_name = experiment_name("rate")
-    actor = make_actor(init_std=0.1, std_range=(0.02, 0.3))
+    # At 500 Hz a motor noise of 0.02 (the old lower bound) explores almost nothing: the std sat at the bound by
+    # iteration 300 and the rate error stayed at 5 rad/s. The bound is now 0.05.
+    actor = make_actor(init_std=0.3, std_range=(0.05, 0.5))

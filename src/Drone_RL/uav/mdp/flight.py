@@ -18,8 +18,13 @@ def thrust_axis(quat: torch.Tensor) -> torch.Tensor:
     return quat_apply(quat, z)
 
 
-def tilt_error(quat: torch.Tensor, wanted_acceleration: torch.Tensor) -> torch.Tensor:
-    """Angle [rad] between the body up axis and the thrust direction that gives ``wanted_acceleration`` (world)."""
-    force_per_mass = wanted_acceleration + torch.tensor([0.0, 0.0, GRAVITY], device=wanted_acceleration.device)
-    wanted_up = force_per_mass / force_per_mass.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+def up_axis_from_angles(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
+    """Body z axis in the world frame of the orientation Rz(yaw) Ry(pitch) Rx(roll) (N, 3): where the thrust points."""
+    ux, uy = torch.sin(pitch) * torch.cos(roll), -torch.sin(roll)
+    cos, sin = torch.cos(yaw), torch.sin(yaw)
+    return torch.stack([cos * ux - sin * uy, sin * ux + cos * uy, torch.cos(pitch) * torch.cos(roll)], dim=-1)
+
+
+def tilt_error(quat: torch.Tensor, wanted_up: torch.Tensor) -> torch.Tensor:
+    """Angle [rad] between the body up axis and ``wanted_up`` (world, unit vectors)."""
     return torch.acos((thrust_axis(quat) * wanted_up).sum(-1).clamp(-1.0, 1.0))

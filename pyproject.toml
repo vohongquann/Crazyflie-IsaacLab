@@ -136,6 +136,14 @@ docstring-code-format = true
 include = ["src", "scripts", "tests"]
 exclude = ["**/__pycache__", "**/logs", ".git", ".venv", ".vscode"]
 typeCheckingMode = "basic"
+extraPaths = [
+    "../IsaacLab/source/isaaclab",
+    "../IsaacLab/source/isaaclab_rl",
+    "../IsaacLab/source/isaaclab_tasks",
+    "../IsaacLab/source/isaaclab_physx",
+    "../IsaacLab/source/isaaclab_visualizers",
+    "../IsaacLab/source/isaaclab_assets",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

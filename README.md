@@ -1,154 +1,169 @@
 <p align="center">
-  <img src="guide/media/banner.png" alt="Crazyflie 2.1 Brushless in Isaac Sim" width="720">
+  <a href="report/media/position_demo.mp4"><img src="report/media/position_demo.gif" alt="Crazyflie flying a circle and a figure 8 in Isaac Sim" width="640"></a>
 </p>
 
 # Drone_RL
 
-Reinforcement learning and classical control for the **Crazyflie 2.1 Brushless** in **Isaac Lab 3.0**.
-A cascaded PID (position, velocity, attitude, rate) and the same four layers learned with PPO, one network per layer,
-trained bottom-up and frozen, small enough to run on the drone's STM32 (no ROS in this repo); plus a landing task on an
-ArUco marker seen by a downward camera. Physical constants come from the datasheet, papers and Bitcraze firmware.
+Two ways to fly a **Crazyflie 2.1 Brushless** in **Isaac Lab 3.0**, compared layer by layer. Both are the same cascade:
+position (50 Hz) → velocity (100 Hz) → attitude (250 Hz) → rate (500 Hz) → motors, on a 1 kHz physics step.
+
+| Controller | What it does |
+|---|---|
+| **PID** | hand-tuned cascaded PID, the baseline |
+| **RL gains** | a small network outputs the 9 PID gains of its layer at every step; the PID computes the command |
+
+Each network is a small MLP trained with PPO, one layer at a time from the bottom up, then frozen, so it is small enough
+for the drone's STM32. The physical constants come from the datasheet, published system identification papers and the
+Bitcraze firmware.
+
+## Results
+
+Each controller is a full cascade from the layer shown down to the motors. Tracking error and motor chatter (mean change
+of the motor commands per step) on the training task of each layer: random commands, 64 drones, one episode. Lower is
+better.
+
+| Layer | Error: PID | RL gains | Chatter: PID | RL gains |
+|---|---|---|---|---|
+| rate (deg/s) | 37.8 | **24.6** | **0.0063** | 0.0075 |
+| attitude (deg) | 15.5 | **5.9** | **0.0021** | 0.0051 |
+| velocity (m/s) | 0.85 | **0.46** | **0.0129** | 0.0342 |
+| position (m) | 0.125 | **0.097** | **0.0032** | 0.0202 |
+
+- **RL gains** cuts the PID's tracking error by 23 to 62 % on every layer and learns in a few hundred PPO iterations,
+  because it starts from the tuned PID: zero output is exactly the PID, so it never produces an unstable controller.
+- **PID** is the smoothest of the two, but slower and it rings after every step. The gain network shakes the motors more
+  on the outer layers (2.6× to 6.3× the PID): that is the next thing to improve.
+
+Step responses, top to bottom: **rate** (steps of 30 deg/s, yaw 90 deg/s), **attitude** (11.5 deg, yaw 46 deg),
+**velocity** (1 m/s steps, then a diagonal) and **position** (0.5 m jumps, then a circle). Each plot shows the wanted
+value (dashed), the two controllers and the command of motor 1.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=YOUR_VIDEO_ID"><img src="guide/media/demo_pid_hover.gif" alt="Demo video" width="360"></a>
-  <img src="guide/media/demo_figure8.gif" alt="Kinematic figure-8" width="360">
+  <img src="report/figures/compare_rate_pid_gains.png" alt="Rate layer step response" width="800"><br>
+  <img src="report/figures/compare_attitude_pid_gains.png" alt="Attitude layer step response" width="800"><br>
+  <img src="report/figures/compare_velocity_pid_gains.png" alt="Velocity layer step response" width="800"><br>
+  <img src="report/figures/compare_position_pid_gains.png" alt="Position layer step response" width="800">
 </p>
 
-> **Demo video:** https://www.youtube.com/watch?v=YOUR_VIDEO_ID
+## Install
 
-| | |
-|---|---|
-| Robot | Crazyflie 2.1 Brushless, 34 g, 100 mm frame, 0.2 N max thrust per motor |
-| Simulator | Isaac Sim 6.1 + Isaac Lab 3.0 |
-| RL | rsl_rl 5.5.1 (PPO): `Isaac-UAV-{Rate,Attitude,Velocity,Position}-RL-v0`, `Isaac-UAV-Landing-ArUco-v0` |
-| Extras | cascaded PID baseline, kinematic trajectory tool |
+You need Ubuntu 22.04 or 24.04 (x86_64), an NVIDIA RTX GPU with driver **580.65 or newer** (`nvidia-smi`), about 30 GB of
+free disk, [Miniconda](https://docs.conda.io/projects/miniconda/en/latest/) and `git`. NVIDIA recommends 16 GB of VRAM
+and 32 GB of RAM; this project was built on an RTX 3060 (12 GB) with 31 GB of RAM. Run the steps in order, in one
+terminal.
 
-Documentation: [guide/readme.md](guide/readme.md) (seven pages, read in order) · [Tiếng Việt](README.vi.md)
-
-## 1. Requirements
-
-- Ubuntu (x86_64), NVIDIA GPU with a recent driver (developed on an RTX 3060, 12 GB)
-- [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html), Python 3.12
-- `git` and [Git LFS](https://git-lfs.com/) (the `.usd` and `.pt` files are stored in LFS)
-
-The first Isaac Sim launch asks you to accept the NVIDIA EULA and downloads extensions, so it can take a few minutes.
-
-## 2. Install, step by step
-
-### 2.1 Clone
+**1. Python environment** (Isaac Sim 6.1 needs Python 3.12):
 
 ```bash
-sudo apt install git-lfs && git lfs install      # once per machine
-mkdir -p ~/Documents/GitHub && cd ~/Documents/GitHub
-git clone https://github.com/vohongquann/Drone_RL.git
-cd Drone_RL && git lfs pull
-```
-
-### 2.2 Install Isaac Sim and Isaac Lab (once)
-
-This project expects Isaac Lab as a sibling folder (`../IsaacLab`, see `[tool.uv.sources]` in `pyproject.toml`).
-
-```bash
-cd ~/Documents/GitHub
-git clone https://github.com/isaac-sim/IsaacLab.git
-cd IsaacLab
 conda create -n env_isaaclab python=3.12 -y
 conda activate env_isaaclab
 python -m pip install --upgrade pip
-./isaaclab.sh -i 'isaacsim,rl[rsl-rl]'      # Isaac Sim 6.1 + Isaac Lab + rsl_rl
 ```
 
-The `isaaclab` command does not exist before this step: `./isaaclab.sh -i` installs the Isaac Lab packages into the
-active conda environment, and one of them provides the `isaaclab` console script. Check it with
-`which isaaclab && isaaclab --help`. See the [official installation guide](https://isaac-sim.github.io/IsaacLab/develop/source/setup/installation/index.html)
-if a step fails. The `uv` setup declared in `pyproject.toml` is not what this project was developed with.
-
-### 2.3 Install this project
+**2. Isaac Sim 6.1, then PyTorch for CUDA 13.0** (about 10 GB; the PyTorch line must come second):
 
 ```bash
-conda activate env_isaaclab
-cd ~/Documents/GitHub/Drone_RL
+pip install "isaacsim[all,extscache]==6.1.0.0" --extra-index-url https://pypi.nvidia.com
+pip install -U torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
+```
+
+**3. Isaac Lab 3.0**, at the commit this project was built on:
+
+```bash
+sudo apt install cmake build-essential
+cd ~/Documents/GitHub
+git clone https://github.com/isaac-sim/IsaacLab.git
+cd IsaacLab && git checkout e53ef4ad
+./isaaclab.sh -i        # Isaac Lab, rsl-rl and the `isaaclab` command (a deprecation warning is normal)
+./isaaclab.sh -p scripts/tutorials/00_sim/create_empty.py --viz kit    # check: opens an empty black window
+```
+
+The first start asks you to accept the NVIDIA licence (type `Yes`) and downloads extensions: it can take over ten
+minutes, later starts take seconds. If something fails, see the
+[official guide](https://isaac-sim.github.io/IsaacLab/develop/source/setup/installation/index.html).
+
+**4. This project**, next to Isaac Lab:
+
+```bash
+cd ~/Documents/GitHub
+sudo apt install git-lfs && git lfs install
+git clone https://github.com/vohongquann/Drone_RL.git
+cd Drone_RL && git lfs pull        # the drone model (.usd) and the trained networks (.pt) are LFS files
 pip install -e . --no-deps
-pip install pytest                    # test dependency
-python -c "import Drone_RL.uav; print('ok')"
+pip install pytest && python -m pytest tests -q
 ```
 
-The last line must print `ok`. Every later command must run in the terminal where `env_isaaclab` is active
-and from the `Drone_RL` folder.
+The tests need no simulator. Run everything below from `Drone_RL` with `env_isaaclab` active.
 
-### 2.4 Run the tests (no simulator window)
+## Try it
 
 ```bash
-python -m pytest tests -q
+# record the trained gain cascade flying a circle and a figure 8 (headless, writes videos/demo/position_demo.mp4)
+python src/Drone_RL/uav/tools/record_position_demo.py --seconds 8 --width 1280 --height 720
+
+# fly the hand-tuned PID in the Isaac Sim window
+python src/Drone_RL/uav/pid_control/pid_hover_test.py --scenario square --viz kit
+
+# compare PID and RL gains on one layer (rate, attitude, velocity or position; about a minute each)
+python src/Drone_RL/uav/tools/compare_layers.py --layer position --methods pid,gains
 ```
 
-## 3. Quick start
+Leave out `--seconds/--width/--height` for the full 1440p clip; add `--sky night` for a night scene or `--sky color`
+offline (the sky texture is downloaded once). `compare_layers.py` writes `report/figures/compare_<layer>_pid_gains.png`
+and `report/metrics/<layer>.json`.
 
-Fly the classical PID (open a window with `--viz kit`):
+## Train your own
+
+The trained networks are already in `src/Drone_RL/uav/rl_control/frozen/gains/`. To retrain, go bottom-up,
+**rate → attitude → velocity → position**: each layer runs on top of the frozen layers below it. For the rate layer:
 
 ```bash
-python src/Drone_RL/uav/pid_control/pid_hover_test.py --scenario hover     # hover | square
+# 1. train (logs/rsl_rl/uav_rate_gains/<run>/, a video clip every 5000 steps)
+isaaclab train --rl_library rsl_rl --task Isaac-UAV-Rate-Gains-v0 --num_envs 2048 \
+    --video --video_length 2500 --video_interval 5000
+# 2. export the last checkpoint to <run>/exported/policy.pt
+isaaclab play --rl_library rsl_rl --task Isaac-UAV-Rate-Gains-v0 --num_envs 1
+# 3. freeze it: the next layer loads this file
+cp logs/rsl_rl/uav_rate_gains/<run>/exported/policy.pt src/Drone_RL/uav/rl_control/frozen/gains/rate.pt
 ```
 
-Follow a known trajectory kinematically and check the motors could fly it:
+| Layer | Task | `--video_length` | Frozen file |
+|---|---|---|---|
+| rate | `Isaac-UAV-Rate-Gains-v0` | 2500 | `frozen/gains/rate.pt` |
+| attitude | `Isaac-UAV-Attitude-Gains-v0` | 1250 | `frozen/gains/attitude.pt` |
+| velocity | `Isaac-UAV-Velocity-Gains-v0` | 500 | `frozen/gains/velocity.pt` |
+| position | `Isaac-UAV-Position-Gains-v0` | 250 | `frozen/gains/position.pt` |
 
-```bash
-python src/Drone_RL/uav/pid_control/run_kinematic.py --pattern figure8   # hover | circle | figure8
+- `isaaclab train` exits with code 0 even when it fails: the run worked if the output ends with `Training time`.
+- Keep `--num_envs` at 2048 or less with `--video` (about 20 GB of RAM).
+- Watch `Metrics/layer/error` in TensorBoard (`tensorboard --logdir logs/rsl_rl`): the tracking error of the layer.
+- After changing a constant in `uav_cfg.py`, retrain from the lowest layer it affects. To rebuild the report, run
+  `compare_layers.py --methods pid,gains` for the four layers, then `python src/Drone_RL/uav/tools/report_figures.py`.
+
+## How it works
+
+```text
+src/Drone_RL/uav/
+├── uav_cfg.py        every physical constant, with its source
+├── pid_control/      the hand-tuned PID of each layer, PID flight test
+├── mdp/              actions (motor curve, mixer, gain cascade), layers, gains, rewards, observations
+├── rl_control/       the tasks (<layer>_env_cfg.py, gains_env_cfg.py), PPO configs, frozen/ networks
+└── tools/            demo recorder, controller comparison, report figures
 ```
 
-Train the RL layers bottom-up, each on top of the frozen ones below (video clips in
-`logs/rsl_rl/uav_<layer>/<run>/videos/train/`):
+A gain network outputs a number `a` in [-1, 1] per gain. A gain the tuned PID already has becomes `tuned × 3^a`, so
+`a = 0` is exactly the tuned PID and the network can scale it from a third to three times. A gain the PID does not use
+(for example the derivative of the position layer) becomes `maximum × max(a, 0)`. The network can only reshape a
+controller that already works, which is why it learns fast and keeps the motors close to the PID's smoothness.
 
-```bash
-isaaclab train --rl_library rsl_rl --task Isaac-UAV-Rate-RL-v0 --num_envs 1024 --video --video_length 400 --video_interval 5000
-isaaclab play --rl_library rsl_rl --task Isaac-UAV-Rate-RL-v0 --num_envs 1
-cp logs/rsl_rl/uav_rate/<run>/exported/policy.pt src/Drone_RL/uav/rl_control/frozen/rate.pt   # then Attitude, Velocity, Position the same way
-```
+## Limitations
 
-Details: [guide/05_rl_cascade.md](guide/05_rl_cascade.md).
-
-## 4. How it works
-
-Read [guide/readme.md](guide/readme.md), then the pages in order:
-
-1. [The drone](guide/01_drone.md): every number and its source
-2. [Propulsion](guide/02_propulsion.md): motor curve, mixer, force on the body
-3. [Kinematic flight](guide/03_kinematic_flight.md): can the motors fly a path?
-4. [PID cascade](guide/04_pid_cascade.md): position, velocity, attitude, rate
-5. [RL cascade](guide/05_rl_cascade.md): the same layers learned and frozen one by one
-6. [ArUco landing](guide/06_aruco_landing.md): camera, marker detection, landing policy
-7. [Một bước mô phỏng, từ PPO đến PhysX](guide/07_simulation_step.md): cái gì chạy theo thứ tự nào, và Isaac Lab điều khiển PhysX ra sao
-
-```
-src/Drone_RL/
-  assets/data/crazyflie/cf2x.usd   drone model (Isaac Sim Crazyflie 2.x)
-  uav/uav_cfg.py                   every physical constant, with its source
-  uav/mdp/                         shared MDP terms: actions (MotorAction, CascadeAction, propulsion, mixer),
-                                   RL layers, commands, observations, rewards, terminations
-  uav/pid_control/                 cascaded PID, layer tests, kinematic trajectory tool
-  uav/rl_control/                  every RL task, one file each (rate, attitude, velocity, position, landing),
-                                   PPO in agents/, frozen/ weights
-tests/                             constants, mixer, PID, RL layers, ArUco (no simulator)
-```
-
-## 5. Known limitations
-
-Not found in any published source, so these are assumptions: propeller mass, in-flight IMU vibration noise. The
-simulation has no motor lag: a motor gives the thrust of its PWM at once. The
-collision geometry of the USD is the Crazyflie 2.x one.
-
-## 6. Development
-
-```bash
-python -m pytest tests -q
-```
+Simulation only, not yet flown on hardware. Not modelled: motor lag, the onboard state estimator (the controllers see the
+true state) and wind. The propeller mass and the IMU vibration noise are assumptions.
 
 ## Acknowledgements
 
-Built on [Isaac Lab](https://github.com/isaac-sim/IsaacLab). Parameters from the Crazyflie 2.1 Brushless datasheet,
-[Bitcraze firmware](https://github.com/bitcraze/crazyflie-firmware), Busetto et al. (arXiv:2512.14450), Folk et al.
-(arXiv:2604.00343) and the Bosch BMI088 datasheet.
-
-## License
-
-See [LICENSE](LICENSE).
+Built on [Isaac Lab](https://github.com/isaac-sim/IsaacLab) and [rsl_rl](https://github.com/leggedrobotics/rsl_rl).
+Parameters from the Crazyflie 2.1 Brushless datasheet, the [Bitcraze firmware](https://github.com/bitcraze/crazyflie-firmware),
+Busetto et al. (arXiv:2512.14450), Folk et al. (arXiv:2604.00343) and the Bosch BMI088 datasheet. The gain-scheduling
+idea comes from the FPV-Drone-Tracking project. Licence: see [LICENSE](LICENSE).
