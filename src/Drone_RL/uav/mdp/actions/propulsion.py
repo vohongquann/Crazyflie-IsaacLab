@@ -120,7 +120,7 @@ class Propulsion:
     def step(self, pwm: torch.Tensor, robot, body_id) -> None:
         """Turn the command ``pwm`` (N, 4) into the wrench on ``body_id``.
 
-        Called once per physics step (1 kHz), before ``sim.step``, by ``MotorAction`` / ``CascadeAction.apply_actions``
+        Called once per physics step (1 kHz), before ``sim.step``, by ``MotorAction`` / ``GainCascadeAction.apply_actions``
         in RL and by hand in the PID scripts. It does not move the drone itself: it only sets the force and torque, and
         PhysX integrates them in the following ``sim.step``.
         """
@@ -130,7 +130,7 @@ class Propulsion:
         #        F_i = g_i * F(PWM_i)
         #    g_i (0.9 .. 1.1) stands for the spread between real motors and propellers: the same PWM never gives exactly
         #    the same thrust on all four, and the controller has to correct it from the gyro. Kept in ``self.force``
-        #    for ``CascadeAction.thrust`` and the propeller picture.
+        #    for ``GainCascadeAction.thrust`` and the propeller picture.
         self.force[:] = pwm_to_thrust(pwm, self.a, self.b, self.c, cfg.gravity, cfg.f_max) * self.gain
         f = self.force
 

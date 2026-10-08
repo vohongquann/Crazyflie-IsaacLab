@@ -1,8 +1,9 @@
-"""Shared part of the four RL cascade tasks (``rate_env_cfg.py`` .. ``position_env_cfg.py``, trained in that order).
+"""Shared part of the four layer tasks (``rate_env_cfg.py`` .. ``position_env_cfg.py``), which the gain tasks
+(``gains_env_cfg.py``, trained in that order) are built on.
 
     scene:        ground, light, Crazyflie starting around 1.5 m
     command:      mdp.commands.LayerCommand (PID layers above + random target and offsets)
-    action:       mdp.actions.CascadeAction (this layer, then the frozen layers below, then the motors)
+    action:       mdp.actions.GainCascadeAction (the gains of this layer, then the frozen gain layers below, then the motors)
     observation:  one term per entry of ``Layer.observation`` (mdp/layers.py), from mdp.observations or Isaac Lab
     reward:       mdp.rewards: error to the command (set per layer) and small smoothness and termination terms
     termination:  time out, or out of the flight envelope (below 0.2 m, above 4 m, 3 m away, upside down)
@@ -27,17 +28,15 @@ from isaaclab.visualizers import VisualizerCfg
 
 from Drone_RL.uav import mdp
 from Drone_RL.uav import uav_cfg as U
-from Drone_RL.uav.mdp.actions.cascade_action import CascadeActionCfg
+from Drone_RL.uav.mdp.actions.gain_action import GainCascadeActionCfg
 from Drone_RL.uav.mdp.actions.constants import FW_TICK_HZ
 from Drone_RL.uav.mdp.commands import LayerCommandCfg
 from Drone_RL.uav.mdp.layers import LAYERS
 
 START_HEIGHT_M = 1.5
 FROZEN_DIR = Path(__file__).resolve().parent / "frozen"
-FROZEN_RL_DIR = FROZEN_DIR / "rl"
-"""``<layer>.pt`` of the RL cascade: the ``exported/policy.pt`` that ``play`` writes in the run folder, copied here."""
 FROZEN_GAINS_DIR = FROZEN_DIR / "gains"
-"""``<layer>.pt`` of the gain cascade, same way."""
+"""``<layer>.pt`` of the gain cascade: the ``exported/policy.pt`` that ``play`` writes in the run folder, copied here."""
 
 
 @configclass
@@ -61,9 +60,9 @@ class FlightSceneCfg(InteractiveSceneCfg):
 @configclass
 class ActionsCfg:
     # layer: set by LayerEnvCfg
-    cascade = CascadeActionCfg(
+    cascade = GainCascadeActionCfg(
         asset_name="robot",
-        frozen_dir=str(FROZEN_RL_DIR),
+        frozen_dir=str(FROZEN_GAINS_DIR),
     )
 
 

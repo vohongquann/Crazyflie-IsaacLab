@@ -7,10 +7,6 @@ the ArUco marker.
     reward:   stay above the pad, go down while aligned, touch down slowly, land on the marker (bonus)
     episode:  10 s, ends early on landing (success) or crash
 
-``LandingCascadeEnvCfg`` (``Isaac-UAV-Landing-ArUco-Cascade-v0``): same scene, observation, reward and episode, but the
-policy writes a wanted velocity to the frozen RL velocity, attitude and rate layers (``rl_control/frozen/rl/``), in the
-place of the position layer, instead of the four motor commands.
-
 Details, frames and numbers: guide/06_aruco_landing.md.
 """
 import math
@@ -32,9 +28,7 @@ from isaaclab.utils import configclass
 from Drone_RL.uav import mdp
 from Drone_RL.uav import uav_cfg as U
 from Drone_RL.uav.mdp.actions.constants import FW_TICK_HZ, LANDING_HZ
-from Drone_RL.uav.mdp.actions.cascade_action import CascadeActionCfg
 from Drone_RL.uav.mdp.actions.motor_action import MotorActionCfg
-from Drone_RL.uav.rl_control.cascade_env_cfg import FROZEN_RL_DIR
 from Drone_RL.uav.rl_control.marker_plate import ArucoPlateCfg
 
 MARKER_SIZE_M = 0.8          # side of the pad including the white margin; the marker itself is 2/3 of it
@@ -205,28 +199,3 @@ class LandingEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = int(round(FW_TICK_HZ / LANDING_HZ))   # 25 Hz policy and camera
         self.sim.render_interval = self.decimation
         self.episode_length_s = 10.0
-
-
-@configclass
-class CascadeActionsCfg:
-    cascade = CascadeActionCfg(
-        asset_name="robot",
-        layer="position",           # the policy output is what the position layer writes: a wanted velocity
-        command_name=None,          # no command term: wanted yaw 0
-        frozen_dir=str(FROZEN_RL_DIR),
-    )
-
-
-@configclass
-class LandingCascadeEnvCfg(LandingEnvCfg):
-    """Landing on top of the frozen RL cascade. End to end, a policy step of 40 ms has to keep the drone level with the
-    four motors; the best end-to-end run landed in 74 % of the episodes (deterministic policy)."""
-
-    actions: CascadeActionsCfg = CascadeActionsCfg()
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.observations.policy.action_history.params["action_name"] = "cascade"
-        # The frozen layers keep the drone level; at -0.05 the body-rate penalty of the motor policy was the largest
-        # term and the policy hovered instead of flying to the pad (it has to tilt to move).
-        self.rewards.spin.weight = -0.005

@@ -7,9 +7,8 @@
         -> FrozenGainLayer(rate)         every 1/500 s: its PID gives the torque -> mixer inverse -> motor commands
         -> Propulsion (every physics step, 1 kHz)
 
-The same chain as ``cascade_action.CascadeAction``, with a PID computing the command of each layer from the gains its
-network writes. The layers below are trained first and frozen (``frozen/gains/<layer>.pt``), bottom-up like the RL
-cascade. With ``pid_below`` the layers below are the tuned PID instead (no frozen file needed).
+The layers below are trained first and frozen (``frozen/gains/<layer>.pt``), bottom-up. With ``pid_below`` the layers
+below are the tuned PID instead (no frozen file needed).
 """
 from __future__ import annotations
 
@@ -23,18 +22,56 @@ from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.utils import configclass
 
 from Drone_RL.uav import uav_cfg as U
-from Drone_RL.uav.mdp.actions.cascade_action import History, PIDRateLayer, output_dim
 from Drone_RL.uav.mdp.actions.frozen_policy import load_frozen_gains
+from Drone_RL.uav.mdp.actions.mixer import force_allocation_inverse
 from Drone_RL.uav.mdp.actions.motor_action import MotorActionCfg
-from Drone_RL.uav.mdp.actions.propulsion import Propulsion
+from Drone_RL.uav.mdp.actions.propulsion import Propulsion, thrust_to_pwm
+from Drone_RL.uav.mdp.flight import GRAVITY
 from Drone_RL.uav.mdp.gains import GAIN_LAYERS
-from Drone_RL.uav.mdp.layers import LAYERS, layers_below
+from Drone_RL.uav.mdp.layers import LAYERS, layers_below, output_dim
 from Drone_RL.uav.pid_control.attitude import AttitudeController
 from Drone_RL.uav.pid_control.position import PositionController
+from Drone_RL.uav.pid_control.rate import RateController
 from Drone_RL.uav.pid_control.velocity import VelocityController
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+class History:
+    """Last outputs of a layer (N, length, action_dim), newest first; the last term of its observation."""
+
+    def __init__(self, num_envs: int, layer, device):
+        self.values = torch.zeros(num_envs, layer.history, layer.action_dim, device=device)
+
+    def push(self, action: torch.Tensor) -> None:
+        self.values = torch.roll(self.values, shifts=1, dims=1)
+        self.values[:, 0] = action
+
+    def reset(self, env_ids) -> None:
+        self.values[env_ids] = 0.0
+
+
+class PIDRateLayer:
+    """The PID rate controller as a step of the chain: [wanted body rates (3), thrust (1)] -> torque
+    (``RateController``) -> force of each motor (mixer inverse) -> motor commands in [0, 1]."""
+
+    def __init__(self, num_envs: int, physics_hz: float, device):
+        self.layer = LAYERS["rate"]
+        self.period = int(round(physics_hz / self.layer.hz))
+        self.dt = self.period / physics_hz
+        self.controller = RateController(device)
+        self.allocation_inverse = force_allocation_inverse(device)
+        self.output = torch.full((num_envs, 4), U.DRONE_HOVER_THROTTLE, device=device)
+
+    def step(self, env, command: torch.Tensor) -> None:
+        torque = self.controller.update(command[:, :3], isaac_mdp.base_ang_vel(env), self.dt)
+        motor_forces = torch.cat([command[:, 3:4], torque], dim=-1) @ self.allocation_inverse.T
+        a, b, c = U.CF_THRUST_COEF_G
+        self.output = thrust_to_pwm(motor_forces, a, b, c, GRAVITY, U.CF_PWM_MAX) / U.CF_PWM_MAX
+
+    def reset(self, env_ids) -> None:
+        self.controller.reset(env_ids)
 
 
 class PIDLayer:
@@ -93,7 +130,7 @@ def pid_layer(name: str, num_envs: int, physics_hz: float, device):
 
 class FrozenGainLayer:
     """A trained gain layer that no longer learns: observation -> frozen network -> 9 gains -> PID of the layer -> command
-    of the layer below. ``CascadeAction.observing`` is this layer while it runs, so the observation terms read its command
+    of the layer below. ``GainCascadeAction.observing`` is this layer while it runs, so the observation terms read its command
     and its history, as in training."""
 
     def __init__(self, name: str, num_envs: int, physics_hz: float, frozen_dir, device):

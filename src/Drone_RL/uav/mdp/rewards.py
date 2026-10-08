@@ -1,9 +1,9 @@
-"""Rewards of the RL cascade tasks and of the landing task.
+"""Rewards of the cascade layer tasks and of the landing task.
 
 Cascade: the error to the command of the layer in training, written like Isaac Lab's ``position_command_error`` and
 ``track_lin_vel_xy_exp``. The ``_l2`` terms (negative weight) keep a slope when the error is large, which is where a new
 policy starts; the ``_exp`` terms are ``exp(-error^2 / std^2)``: 1 on the command, 0 far from it. The command comes
-from ``commands.LayerCommand``, the thrust and the velocity at the start of the step from ``actions.CascadeAction``.
+from ``commands.LayerCommand``, the thrust and the velocity at the start of the step from ``actions.GainCascadeAction``.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-# ── RL cascade ──────────────────────────────────────────────────────────────────────────
+# ── Cascade ─────────────────────────────────────────────────────────────────────────────
 # ``command_name``: the command term of the layer in training; ``action_name``: the cascade action term.
 
 def rate_error_l2(env: ManagerBasedRLEnv, command_name: str = "layer") -> torch.Tensor:

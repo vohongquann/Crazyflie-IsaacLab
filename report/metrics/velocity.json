@@ -18,12 +18,6 @@
       ],
       "step_error_mean": 0.0723
     },
-    "rl": {
-      "trained": false,
-      "missing": [
-        "src/Drone_RL/uav/rl_control/frozen/rl/velocity.pt"
-      ]
-    },
     "gains": {
       "trained": true,
       "random": {
@@ -31,7 +25,7 @@
         "error_raw": 0.46175825595855713,
         "error_unit": "m/s",
         "flying": 1.0,
-        "motor_change": 0.03416999452786274
+        "motor_change": 0.03416998291198469
       },
       "step_error": [
         0.0998,

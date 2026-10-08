@@ -10,8 +10,8 @@ s_i its spin sign (``uav_cfg.CF_MOTOR_SPIN``):
 
 ``force_allocation_inverse`` is the inverse: the force each motor must produce for a wrench [T, tau_x, tau_y, tau_z].
 It is used wherever the rate loop is the PID, which works in newtons and newton metres: the classical PID cascade, the
-kinematic flight, and the gain tasks (``GainCascadeAction``, the PID rate layer). Only a policy that writes the four motor commands itself (``MotorAction``, the RL
-rate layer) does not need it.
+kinematic flight, and the gain tasks (``GainCascadeAction``, the PID rate layer). Only a policy that writes the four motor commands itself (``MotorAction``, the landing
+task) does not need it.
 """
 
 import torch

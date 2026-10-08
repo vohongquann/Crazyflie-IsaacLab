@@ -1,4 +1,4 @@
-"""Velocity layer task (``Isaac-UAV-Velocity-RL-v0``): velocity -> roll, pitch, thrust, 100 Hz.
+"""Velocity layer task: velocity -> roll, pitch, thrust, 100 Hz (base of ``Isaac-UAV-Velocity-Gains-v0``).
 
 Frozen attitude and rate layers below; the command comes from the PID position layer. Everything else is
 ``cascade_env_cfg.py``.
@@ -21,7 +21,7 @@ from Drone_RL.uav.rl_control.cascade_env_cfg import (
 
 @configclass
 class VelocityPolicyCfg(PolicyCfg):
-    """Velocity error, velocity, thrust direction, last 2 outputs (15)."""
+    """Velocity error, velocity, thrust direction, last outputs (the gains)."""
 
     velocity_error = ObsTerm(func=mdp.velocity_error)
     velocity = ObsTerm(func=isaac_mdp.root_lin_vel_w)

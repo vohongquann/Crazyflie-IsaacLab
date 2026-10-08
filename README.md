@@ -31,18 +31,28 @@ better.
 
 - **RL gains** cuts the PID's tracking error by 23 to 62 % on every layer and learns in a few hundred PPO iterations,
   because it starts from the tuned PID: zero output is exactly the PID, so it never produces an unstable controller.
-- **PID** is the smoothest of the two, but slower and it rings after every step. The gain network shakes the motors more
-  on the outer layers (2.6× to 6.3× the PID): that is the next thing to improve.
+- **PID** is the smoothest of the two, but slower and it rings after every step. The gain network shakes the motors more on the
+  outer layers (2.6× to 6.3× the PID): that is the next thing to improve.
+
+<p align="center">
+  <img src="report/figures/summary.png" alt="Tracking error and motor chatter relative to the PID" width="800">
+</p>
 
 Step responses, top to bottom: **rate** (steps of 30 deg/s, yaw 90 deg/s), **attitude** (11.5 deg, yaw 46 deg),
 **velocity** (1 m/s steps, then a diagonal) and **position** (0.5 m jumps, then a circle). Each plot shows the wanted
 value (dashed), the two controllers and the command of motor 1.
 
 <p align="center">
-  <img src="report/figures/compare_rate_pid_gains.png" alt="Rate layer step response" width="800"><br>
-  <img src="report/figures/compare_attitude_pid_gains.png" alt="Attitude layer step response" width="800"><br>
-  <img src="report/figures/compare_velocity_pid_gains.png" alt="Velocity layer step response" width="800"><br>
-  <img src="report/figures/compare_position_pid_gains.png" alt="Position layer step response" width="800">
+  <img src="report/figures/compare_rate.png" alt="Rate layer step response" width="800"><br>
+  <img src="report/figures/compare_attitude.png" alt="Attitude layer step response" width="800"><br>
+  <img src="report/figures/compare_velocity.png" alt="Velocity layer step response" width="800"><br>
+  <img src="report/figures/compare_position.png" alt="Position layer step response" width="800">
+</p>
+
+Training curves (reward, tracking error with the PID as a dashed line, action noise), one layer per row:
+
+<p align="center">
+  <img src="report/figures/training.png" alt="Training curves of the gain networks" width="800">
 </p>
 
 ## Install
@@ -104,13 +114,13 @@ python src/Drone_RL/uav/tools/record_position_demo.py --seconds 8 --width 1280 -
 # fly the hand-tuned PID in the Isaac Sim window
 python src/Drone_RL/uav/pid_control/pid_hover_test.py --scenario square --viz kit
 
-# compare PID and RL gains on one layer (rate, attitude, velocity or position; about a minute each)
-python src/Drone_RL/uav/tools/compare_layers.py --layer position --methods pid,gains
+# compare PID and RL gains on one layer (rate, attitude, velocity or position; two to four minutes each)
+python src/Drone_RL/uav/tools/compare_layers.py --layer position
 ```
 
 Leave out `--seconds/--width/--height` for the full 1440p clip; add `--sky night` for a night scene or `--sky color`
-offline (the sky texture is downloaded once). `compare_layers.py` writes `report/figures/compare_<layer>_pid_gains.png`
-and `report/metrics/<layer>.json`.
+offline (the sky texture is downloaded once). `compare_layers.py` writes `report/figures/compare_<layer>.png` and
+`report/metrics/<layer>.json`.
 
 ## Train your own
 
@@ -138,7 +148,7 @@ cp logs/rsl_rl/uav_rate_gains/<run>/exported/policy.pt src/Drone_RL/uav/rl_contr
 - Keep `--num_envs` at 2048 or less with `--video` (about 20 GB of RAM).
 - Watch `Metrics/layer/error` in TensorBoard (`tensorboard --logdir logs/rsl_rl`): the tracking error of the layer.
 - After changing a constant in `uav_cfg.py`, retrain from the lowest layer it affects. To rebuild the report, run
-  `compare_layers.py --methods pid,gains` for the four layers, then `python src/Drone_RL/uav/tools/report_figures.py`.
+  `compare_layers.py` for the four layers, then `python src/Drone_RL/uav/tools/report_figures.py`.
 
 ## How it works
 

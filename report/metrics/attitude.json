@@ -18,22 +18,6 @@
       ],
       "step_error_mean": 1.8915
     },
-    "rl": {
-      "trained": true,
-      "random": {
-        "error": 6.937330505541333,
-        "error_raw": 0.12107925862073898,
-        "error_unit": "deg",
-        "flying": 1.0,
-        "motor_change": 0.02887102546949459
-      },
-      "step_error": [
-        1.3963,
-        0.7676,
-        5.6807
-      ],
-      "step_error_mean": 2.6149
-    },
     "gains": {
       "trained": true,
       "random": {

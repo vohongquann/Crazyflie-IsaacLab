@@ -1,4 +1,4 @@
-"""PID gains as the output of an RL layer (the ``-Gains-`` tasks).
+"""PID gains as the output of a network (the ``-Gains-`` tasks).
 
 The network of a layer does not write the command of the layer below; it writes the nine gains of the PID of that layer
 (kp, ki, kd of the three axes), and the PID of ``pid_control/`` computes the command with them. Every other layer of the
@@ -45,9 +45,8 @@ class GainLayer:
 
     @property
     def obs_dim(self) -> int:
-        """Observation of the layer (same terms as ``LAYERS[name]``) with the history of the gains in place of its own."""
-        layer = LAYERS[self.name]
-        return layer.obs_dim - layer.history * layer.action_dim + self.history * self.action_dim
+        """Observation of the layer (the terms of ``LAYERS[name]``), the last of which is the history of the gains."""
+        return LAYERS[self.name].state_dim + self.history * self.action_dim
 
     def gains(self, action: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Network output (N, 9) in [-1, 1] -> kp, ki, kd, each (N, 3)."""

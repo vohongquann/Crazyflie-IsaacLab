@@ -1,6 +1,7 @@
-"""Attitude layer task (``Isaac-UAV-Attitude-RL-v0``): roll, pitch, yaw and thrust -> body rates (thrust passes through), 250 Hz.
+"""Attitude layer task: roll, pitch, yaw and thrust -> body rates (thrust passes through), 250 Hz (base of
+``Isaac-UAV-Attitude-Gains-v0``).
 
-Rate below: the frozen rate network. The command comes from the PID position and velocity layers (the velocity layer writes
+Rate below: the frozen rate gain network. The command comes from the PID position and velocity layers (the velocity layer writes
 roll, pitch and thrust). Everything else is
 ``cascade_env_cfg.py``.
 """
@@ -23,8 +24,8 @@ from Drone_RL.uav.rl_control.cascade_env_cfg import (
 
 @configclass
 class AttitudePolicyCfg(PolicyCfg):
-    """Roll, pitch and yaw error, wanted thrust / weight, gravity direction in the body frame, body rates, last 2
-    outputs (16)."""
+    """Roll, pitch and yaw error, wanted thrust / weight, gravity direction in the body frame, body rates, last
+    outputs (the gains)."""
 
     attitude_error = ObsTerm(func=mdp.attitude_error)
     thrust_ratio = ObsTerm(func=mdp.thrust_ratio)

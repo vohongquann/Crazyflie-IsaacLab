@@ -1,4 +1,4 @@
-"""Position layer task (``Isaac-UAV-Position-RL-v0``): target position -> velocity, 50 Hz.
+"""Position layer task: target position -> velocity, 50 Hz (base of ``Isaac-UAV-Position-Gains-v0``).
 
 Frozen velocity, attitude and rate layers below; the command is a random target that runs on a circle or a figure 8 (or stays) and its
 velocity, so the layer learns to follow trajectories. Everything else is
@@ -22,7 +22,7 @@ from Drone_RL.uav.rl_control.cascade_env_cfg import (
 
 @configclass
 class PositionPolicyCfg(PolicyCfg):
-    """Position error, velocity, velocity of the target, last 2 outputs (15)."""
+    """Position error, velocity, velocity of the target, last outputs (the gains)."""
 
     position_error = ObsTerm(func=mdp.position_error)
     velocity = ObsTerm(func=isaac_mdp.root_lin_vel_w)

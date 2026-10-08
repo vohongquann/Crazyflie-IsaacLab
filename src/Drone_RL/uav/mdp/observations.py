@@ -1,8 +1,8 @@
 """Observation terms.
 
-RL cascade: the observation of a layer, one function per term, written like the ones of Isaac Lab (``env`` in, tensor
+Cascade: the observation of a layer, one function per term, written like the ones of Isaac Lab (``env`` in, tensor
 out). The robot is read through Isaac Lab (``base_ang_vel``, ``root_lin_vel_w``, ``root_pos_w``, ``root_quat_w``,
-``projected_gravity``); the command and the last outputs come from ``CascadeAction.observing``: the layer in training,
+``projected_gravity``); the command and the last outputs come from ``GainCascadeAction.observing``: the layer in training,
 or the frozen layer that the cascade is running at that moment. So a frozen layer sees what it saw in training, with the
 same functions. Each layer lists its terms in ``layers.py`` (``Layer.observation``) and in its env cfg.
 
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-# ── RL cascade ──────────────────────────────────────────────────────────────────────────
+# ── Cascade ─────────────────────────────────────────────────────────────────────────────
 # ``action_name``: the cascade action term; its ``observing`` layer has ``command`` (N, command_dim) and ``history``.
 
 def rate_error(env: ManagerBasedRLEnv, action_name: str = "cascade") -> torch.Tensor:

@@ -1,4 +1,4 @@
-"""Rate layer task (``Isaac-UAV-Rate-RL-v0``): body rates and thrust -> four motor commands, 500 Hz.
+"""Rate layer task: body rates and thrust -> four motor commands, 500 Hz (base of ``Isaac-UAV-Rate-Gains-v0``).
 
 No frozen layer below; the command comes from the PID position, velocity and attitude layers. Everything else is
 ``cascade_env_cfg.py``.
@@ -24,7 +24,7 @@ from Drone_RL.uav.rl_control.cascade_env_cfg import (
 
 @configclass
 class RatePolicyCfg(PolicyCfg):
-    """Rate error, body rates, wanted thrust / weight, last 4 outputs (23)."""
+    """Rate error, body rates, wanted thrust / weight, last outputs (the gains)."""
 
     rate_error = ObsTerm(func=mdp.rate_error)
     body_rates = ObsTerm(func=isaac_mdp.base_ang_vel)

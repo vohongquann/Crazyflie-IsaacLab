@@ -31,17 +31,3 @@ class LandingPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
-
-
-@configclass
-class LandingCascadePPORunnerCfg(LandingPPORunnerCfg):
-    """``Isaac-UAV-Landing-ArUco-Cascade-v0``: wanted velocity (3) instead of motor commands, own log folder."""
-
-    max_iterations = 1000
-    experiment_name = "uav_landing_aruco_cascade"
-    actor = RslRlMLPModelCfg(
-        hidden_dims=[128, 128, 64],
-        activation="elu",
-        obs_normalization=True,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5),
-    )

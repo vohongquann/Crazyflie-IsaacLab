@@ -18,21 +18,14 @@
       ],
       "step_error_mean": 0.0866
     },
-    "rl": {
-      "trained": false,
-      "missing": [
-        "src/Drone_RL/uav/rl_control/frozen/rl/position.pt",
-        "src/Drone_RL/uav/rl_control/frozen/rl/velocity.pt"
-      ]
-    },
     "gains": {
       "trained": true,
       "random": {
-        "error": 0.09669765084981918,
-        "error_raw": 0.09669765084981918,
+        "error": 0.09669778496026993,
+        "error_raw": 0.09669778496026993,
         "error_unit": "m",
         "flying": 1.0,
-        "motor_change": 0.020170951486194043
+        "motor_change": 0.020171901194803547
       },
       "step_error": [
         0.1174,

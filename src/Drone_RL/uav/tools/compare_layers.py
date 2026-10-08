@@ -1,11 +1,10 @@
-"""Compare the three controllers of one layer: tuned PID, RL (the network writes the command of the layer below) and
-RL gains (the network writes the 9 PID gains of the layer). Each one is a full cascade from that layer down:
+"""Compare the two controllers of one layer: tuned PID and RL gains (the network writes the 9 PID gains of the layer).
+Each one is a full cascade from that layer down:
 
     pid       tuned PID of the layer over the tuned PID layers below            (Isaac-UAV-<Layer>-Gains-v0, action 0)
-    rl        frozen/rl/<layer>.pt over frozen/rl/<layers below>.pt             (Isaac-UAV-<Layer>-RL-v0)
     gains     frozen/gains/<layer>.pt over frozen/gains/<layers below>.pt       (Isaac-UAV-<Layer>-Gains-v0)
 
-Two measurements, headless, the same seed for the three:
+Two measurements, headless, the same seed for both:
 
     random    the training task: 64 drones, random commands of the layers above, one episode; mean tracking error of the
               layer, share of drones still flying at the end, motor command change per step (chatter)
@@ -13,11 +12,9 @@ Two measurements, headless, the same seed for the three:
               then a circle); mean |error| per axis, plotted
 
     python src/Drone_RL/uav/tools/compare_layers.py --layer attitude
-    python src/Drone_RL/uav/tools/compare_layers.py --layer attitude --methods pid,gains    # README figure, no RL
 
-Writes ``report/figures/compare_<layer>.png`` and ``report/metrics/<layer>.json``. A method whose frozen policy is
-missing (e.g. an RL layer not trained yet) is skipped and marked so in the json. With ``--methods`` only those
-controllers run: the figure is ``compare_<layer>_<methods>.png`` and the json keeps the entries of the others.
+Writes ``report/figures/compare_<layer>.png`` and ``report/metrics/<layer>.json``. If a frozen gain network is missing
+(a layer not trained yet), the gains are skipped and marked so in the json.
 """
 import argparse
 import json
@@ -30,7 +27,6 @@ REPO = Path(__file__).resolve().parents[4]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--layer", required=True, choices=["rate", "attitude", "velocity", "position"])
-parser.add_argument("--methods", default="pid,rl,gains", help="comma-separated subset of pid, rl, gains")
 parser.add_argument("--out", default=str(REPO / "report"), help="report folder (figures/ and metrics/ inside)")
 parser.add_argument("--num_envs", type=int, default=8, help="drones of the step test")
 parser.add_argument("--eval_envs", type=int, default=64, help="drones of the random-command test")
@@ -52,19 +48,13 @@ from Drone_RL.uav import uav_cfg as U  # noqa: E402
 from Drone_RL.uav.mdp.flight import GRAVITY  # noqa: E402
 from Drone_RL.uav.mdp.layers import layers_below  # noqa: E402
 from Drone_RL.uav.rl_control import gains_env_cfg as G  # noqa: E402
-from Drone_RL.uav.rl_control.attitude_env_cfg import AttitudeEnvCfg  # noqa: E402
-from Drone_RL.uav.rl_control.cascade_env_cfg import FROZEN_GAINS_DIR, FROZEN_RL_DIR  # noqa: E402
-from Drone_RL.uav.rl_control.position_env_cfg import PositionEnvCfg  # noqa: E402
-from Drone_RL.uav.rl_control.rate_env_cfg import RateEnvCfg  # noqa: E402
-from Drone_RL.uav.rl_control.velocity_env_cfg import VelocityEnvCfg  # noqa: E402
+from Drone_RL.uav.rl_control.cascade_env_cfg import FROZEN_GAINS_DIR  # noqa: E402
 
 torch.set_grad_enabled(False)
 LAYER = args.layer
-METHODS = [m for m in ("pid", "rl", "gains") if m in args.methods.split(",")]
-ALL_METHODS = len(METHODS) == 3
-NAMES = {"pid": "PID", "rl": "RL", "gains": "RL gains"}
-COLORS = {"pid": "#4c72b0", "rl": "#dd5555", "gains": "#2ca02c"}
-RL_CFG = {"rate": RateEnvCfg, "attitude": AttitudeEnvCfg, "velocity": VelocityEnvCfg, "position": PositionEnvCfg}
+METHODS = ["pid", "gains"]
+NAMES = {"pid": "PID", "gains": "RL gains"}
+COLORS = {"pid": "#4c72b0", "gains": "#2ca02c"}
 GAINS_CFG = {"rate": G.RateGainsEnvCfg, "attitude": G.AttitudeGainsEnvCfg, "velocity": G.VelocityGainsEnvCfg,
              "position": G.PositionGainsEnvCfg}
 HEIGHT = 1.5
@@ -135,8 +125,8 @@ def wrap(angle):
     return torch.atan2(torch.sin(angle), torch.cos(angle))
 
 
-def policy_file(method, layer):
-    return (FROZEN_RL_DIR if method == "rl" else FROZEN_GAINS_DIR) / f"{layer}.pt"
+def policy_file(layer):
+    return FROZEN_GAINS_DIR / f"{layer}.pt"
 
 
 def missing(method):
@@ -144,11 +134,11 @@ def missing(method):
     if method == "pid":
         return []
     names = [LAYER] + [layer.name for layer in layers_below(LAYER)]
-    return [str(policy_file(method, name).relative_to(REPO)) for name in names if not policy_file(method, name).exists()]
+    return [str(policy_file(name).relative_to(REPO)) for name in names if not policy_file(name).exists()]
 
 
 def make_env(method, test):
-    cfg = (RL_CFG if method == "rl" else GAINS_CFG)[LAYER]()
+    cfg = GAINS_CFG[LAYER]()
     if method == "pid":
         cfg.actions.cascade.pid_below = True
     cfg.scene.num_envs = args.num_envs if test else args.eval_envs
@@ -165,7 +155,7 @@ def actor(method, env):
     if method == "pid":
         zeros = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
         return lambda obs: zeros
-    policy = torch.jit.load(str(policy_file(method, LAYER)), map_location=env.device)
+    policy = torch.jit.load(str(policy_file(LAYER)), map_location=env.device)
     return lambda obs: policy(obs).clamp(-1.0, 1.0)
 
 
@@ -241,11 +231,9 @@ out = Path(args.out)
 (out / "metrics").mkdir(parents=True, exist_ok=True)
 (out / "figures").mkdir(parents=True, exist_ok=True)
 json_path = out / "metrics" / f"{LAYER}.json"
-if not ALL_METHODS and json_path.exists():       # a subset run keeps the entries of the controllers it did not run
-    metrics["methods"] = {**json.loads(json_path.read_text())["methods"], **metrics["methods"]}
 json_path.write_text(json.dumps(metrics, indent=2))
 
-# ── Figure: the three methods on the same axes ────────────────────────────────────────────────────────────────
+# ── Figure: both methods on the same axes ────────────────────────────────────────────────────────────────────
 circle = LAYER == "position"
 rows = 4
 fig = plt.figure(figsize=(13, 2.6 * rows + (0.5 if circle else 0)))
@@ -282,11 +270,10 @@ if circle:
     a.legend(fontsize=8)
     a.grid(alpha=0.3)
 skipped = [NAMES[m] for m in METHODS if m not in results]
-fig.suptitle(f"{LAYER} layer: step response of {'the three controllers' if ALL_METHODS else 'the controllers'} "
-             f"(mean of {args.num_envs} drones)"
+fig.suptitle(f"{LAYER} layer: step response of the controllers (mean of {args.num_envs} drones)"
              + (f"; not trained yet: {', '.join(skipped)}" if skipped else ""))
 fig.tight_layout()
-figure = out / "figures" / (f"compare_{LAYER}.png" if ALL_METHODS else f"compare_{LAYER}_{'_'.join(METHODS)}.png")
+figure = out / "figures" / f"compare_{LAYER}.png"
 fig.savefig(figure, dpi=110)
 print("COMPARE saved", figure)
 app.close()

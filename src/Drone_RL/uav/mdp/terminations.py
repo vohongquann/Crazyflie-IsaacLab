@@ -1,4 +1,4 @@
-"""Terminations: flight volume (RL cascade tasks) and landed / crashed (landing task, pad at the env origin)."""
+"""Terminations: flight volume (layer tasks) and landed / crashed (landing task, pad at the env origin)."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
